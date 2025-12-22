@@ -1,0 +1,24 @@
+## Build output
+bin/
+obj/
+
+## Visual Studio
+.vs/
+*.user
+*.suo
+*.log
+
+## OS
+Thumbs.db
+.DS_Store
+
+## Local TM work folders (DO NOT COMMIT)
+work/
+build/
+generated/
+xml/
+TMTools/
+
+## Local config
+*.local.*
+Paths.json
