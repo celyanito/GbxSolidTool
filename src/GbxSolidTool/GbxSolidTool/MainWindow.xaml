@@ -29,8 +29,8 @@
                         <Button Padding="12,6"
             Content="Convert XML" Click="ConvertXml_Click"/>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,4,0,0">
-                            <CheckBox x:Name="Cb3dsVisual" Content="-v" Foreground="#ddd" Margin="0,0,8,0"/>
-                            <CheckBox x:Name="Cb3dsSurface" Content="-s" Foreground="#ddd"/>
+                            <CheckBox x:Name="Cb3dsVisual" Content="-v" IsChecked="True" Foreground="#ddd" Margin="0,0,8,0"/>
+                            <CheckBox x:Name="Cb3dsSurface" Content="-s" IsChecked="True" Foreground="#ddd"/>
                         </StackPanel>
                     </StackPanel>
 
