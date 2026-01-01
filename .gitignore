@@ -1,24 +1,16 @@
-## Build output
-bin/
-obj/
-
-## Visual Studio
+﻿# Visual Studio
 .vs/
 *.user
 *.suo
+
+# Build .NET
+**/bin/
+**/obj/
+
+# Logs
 *.log
 
-## OS
-Thumbs.db
-.DS_Store
-
-## Local TM work folders (DO NOT COMMIT)
-work/
+# Outputs générés par l’outil (si tu en crées)
 build/
-generated/
 xml/
-TMTools/
-
-## Local config
-*.local.*
-Paths.json
+work/
