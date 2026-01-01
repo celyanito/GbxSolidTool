@@ -14,3 +14,15 @@
 build/
 xml/
 work/
+
+# do not version embedded python
+tools/python/
+
+
+# python venv
+tools/venv313/
+
+
+# python cache
+__pycache__/
+

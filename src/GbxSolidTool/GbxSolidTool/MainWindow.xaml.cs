@@ -8,6 +8,7 @@ using System.Text;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Media3D;
+using GbxSolidTool.Core;
 
 namespace GbxSolidTool
 {
@@ -18,6 +19,10 @@ namespace GbxSolidTool
 		private ModelVisual3D? _modelVisual;
 		private LinesVisual3D? _wireframe;
 		private Color _overrideColor = Colors.LightGray;
+		private readonly AppPaths _paths = new(); 
+		private bool _logsVisible = true;
+		private GridLength _lastLogsWidth = new GridLength(380);
+
 
 		public MainWindow()
 		{
@@ -27,13 +32,73 @@ namespace GbxSolidTool
 			View3D.Children.Add(new DefaultLights());
 
 			Log("Ready.");
+			UpdateOverlay();
 		}
+		private void LoadTemplate_Click(object sender, RoutedEventArgs e)
+		{
+			try
+			{
+				// Repo root / tools
+				var tools3ds2gbxml = Path.Combine(_paths.RepoRoot, "tools", "3ds2gbxml");
+				if (!Directory.Exists(tools3ds2gbxml))
+				{
+					Status("tools/3ds2gbxml missing.");
+					Log($"Missing folder: {tools3ds2gbxml}");
+					return;
+				}
 
+				// Cherche tous les .3ds
+				var candidates = Directory.GetFiles(tools3ds2gbxml, "*.3ds", SearchOption.AllDirectories);
+				if (candidates.Length == 0)
+				{
+					Status("No template .3ds found in tools/3ds2gbxml.");
+					Log("No *.3ds found under: " + tools3ds2gbxml);
+					return;
+				}
+
+				// Score: on préfère "Template.3ds", puis ceux contenant "template" ou "basic"
+				string PickBest(string[] files)
+				{
+					int Score(string p)
+					{
+						var name = Path.GetFileName(p).ToLowerInvariant();
+						var full = p.ToLowerInvariant();
+						int s = 0;
+
+						if (name == "template.3ds") s += 1000;
+						if (name.Contains("template")) s += 200;
+						if (full.Contains("basic")) s += 150;
+						if (full.Contains("model")) s += 50;
+
+						// plus près de la racine = un peu mieux
+						var depth = p.Count(c => c == Path.DirectorySeparatorChar || c == Path.AltDirectorySeparatorChar);
+						s -= depth;
+
+						return s;
+					}
+
+					return files.OrderByDescending(Score).First();
+				}
+
+				var best = PickBest(candidates);
+
+				Log($"Load Template: {best}");
+				LoadModel(best);
+			}
+			catch (Exception ex)
+			{
+				Log("LoadTemplate ERROR: " + ex);
+				Status("Load template failed (see logs).");
+			}
+		}
 		private void Open_Click(object sender, RoutedEventArgs e)
 		{
 			var dlg = new OpenFileDialog
 			{
-				Filter = "3D models|*.3ds;*.obj;*.stl;*.dae;*.ply;*.off;*.lwo|All files|*.*",
+				Filter = "3DS model (*.3ds)|*.3ds",
+				DefaultExt = ".3ds",
+				AddExtension = true,
+				CheckFileExists = true,
 				Title = "Open a 3D model"
 			};
 
@@ -46,6 +111,36 @@ namespace GbxSolidTool
 			RemoveCurrentModel();
 			Status("Cleared.");
 		}
+		private void UpdateOverlay()
+		{
+			// overlay visible uniquement si aucun modèle
+			DropOverlay.Visibility = (_modelVisual == null) ? Visibility.Visible : Visibility.Collapsed;
+		}
+		private void ToggleLogs_Click(object sender, RoutedEventArgs e)
+		{
+			SetLogsVisible(!_logsVisible);
+		}
+
+		private void SetLogsVisible(bool visible)
+		{
+			_logsVisible = visible;
+
+			if (visible)
+			{
+				// restaure largeur précédente (ou 380 par défaut)
+				LogsColumn.Width = (_lastLogsWidth.Value < 1) ? new GridLength(380) : _lastLogsWidth;
+				LogsColumn.MinWidth = 220;
+			}
+			else
+			{
+				// mémorise largeur actuelle, puis cache
+				_lastLogsWidth = LogsColumn.Width;
+				LogsColumn.MinWidth = 0;
+				LogsColumn.Width = new GridLength(0);
+			}
+			ToggleLogsButton.Content = visible ? "Hide Logs" : "Show Logs";
+
+		}
 
 		private void Viewport_DragOver(object sender, DragEventArgs e)
 		{
@@ -56,6 +151,12 @@ namespace GbxSolidTool
 				var files = (string[])e.Data.GetData(DataFormats.FileDrop);
 				if (files?.Length > 0 && File.Exists(files[0]))
 					e.Effects = DragDropEffects.Copy;
+				if (files?.Length > 0 && File.Exists(files[0]) &&
+					string.Equals(Path.GetExtension(files[0]), ".3ds", StringComparison.OrdinalIgnoreCase))
+				{
+					e.Effects = DragDropEffects.Copy;
+				}
+
 			}
 
 			e.Handled = true;
@@ -71,8 +172,16 @@ namespace GbxSolidTool
 				return;
 
 			var path = files[0];
+			if (!string.Equals(Path.GetExtension(path), ".3ds", StringComparison.OrdinalIgnoreCase))
+			{
+				Status("Only .3ds is supported.");
+				return;
+			}
+
 			if (File.Exists(path))
 				LoadModel(path);
+
+
 		}
 
 		private void Wireframe_Checked(object sender, RoutedEventArgs e)
@@ -135,6 +244,8 @@ namespace GbxSolidTool
 
 				Status($"Loaded: {Path.GetFileName(path)} ({path})");
 
+				UpdateOverlay();
+
 				// If wireframe is checked, rebuild it
 				UpdateWireframe(_wireframeEnabled);
 
@@ -160,6 +271,7 @@ namespace GbxSolidTool
 				View3D.Children.Remove(_modelVisual);
 				_modelVisual = null;
 			}
+			UpdateOverlay();
 		}
 
 		private bool IsWireframeChecked() => _wireframeEnabled;

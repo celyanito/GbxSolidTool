@@ -15,29 +15,53 @@
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
+                    <!-- Load Template -->
                     <ColumnDefinition Width="Auto"/>
+                    <!-- Open -->
                     <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="24"/>
+                    <!-- Clear -->
                     <ColumnDefinition Width="Auto"/>
+                    <!-- Show Logs -->
+                    <ColumnDefinition Width="18"/>
                     <ColumnDefinition Width="Auto"/>
+                    <!-- Wireframe -->
+                    <ColumnDefinition Width="18"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <!-- Color label -->
+                    <ColumnDefinition Width="Auto"/>
+                    <!-- Color combo -->
                     <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
+                    <!-- spacer -->
                 </Grid.ColumnDefinitions>
 
                 <Button Grid.Column="0" Padding="12,6" Margin="0,0,8,0"
-                        Content="Open (.3ds/.obj/.stl...)" Click="Open_Click"/>
+                Content="Load Template" Click="LoadTemplate_Click"/>
 
                 <Button Grid.Column="1" Padding="12,6" Margin="0,0,8,0"
-                        Content="Clear" Click="Clear_Click"/>
+                Content="Open (.3ds)" Click="Open_Click"/>
 
-                <CheckBox Grid.Column="2" Margin="0,0,8,0" VerticalAlignment="Center"
-                          Content="Wireframe" Foreground="#ddd"
-                          Checked="Wireframe_Checked" Unchecked="Wireframe_Unchecked"/>
+                <Button Grid.Column="2" Padding="12,6" Margin="0,0,8,0"
+                Content="Clear" Click="Clear_Click"/>
 
-                <TextBlock Grid.Column="4" VerticalAlignment="Center" Foreground="#bbb" Margin="0,0,8,0"
-                           Text="Color:"/>
-                <ComboBox Grid.Column="5" Width="140" SelectedIndex="0"
-                          SelectionChanged="ColorCombo_SelectionChanged">
+                <Button Grid.Column="3" Padding="12,6" Margin="0,0,8,0"
+                Content="Show Logs" Click="ToggleLogs_Click"/>
+                <Button x:Name="ToggleLogsButton"
+                        Grid.Column="3"
+                        Padding="12,6"
+                        Margin="0,0,8,0"
+                        Content="Show Logs"
+                        Click="ToggleLogs_Click"/>
+
+
+                <CheckBox Grid.Column="5" VerticalAlignment="Center"
+                  Content="Wireframe" Foreground="#ddd"
+                  Checked="Wireframe_Checked" Unchecked="Wireframe_Unchecked"/>
+
+                <TextBlock Grid.Column="7" VerticalAlignment="Center" Foreground="#bbb" Margin="0,0,8,0"
+                   Text="Color:"/>
+
+                <ComboBox Grid.Column="8" Width="160" SelectedIndex="0"
+                  SelectionChanged="ColorCombo_SelectionChanged">
                     <ComboBoxItem Content="LightGray"/>
                     <ComboBoxItem Content="White"/>
                     <ComboBoxItem Content="Orange"/>
@@ -45,11 +69,9 @@
                     <ComboBoxItem Content="Cyan"/>
                     <ComboBoxItem Content="Lime"/>
                 </ComboBox>
-
-                <TextBlock Grid.Column="7" VerticalAlignment="Center" Foreground="#888"
-                           Text="Drag &amp; drop a model into the viewport"/>
             </Grid>
         </Border>
+
 
         <!-- Bottom status -->
         <Border DockPanel.Dock="Bottom" Background="#1a1a1a" Padding="8">
@@ -60,24 +82,53 @@
         <Grid>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="380"/>
+                <ColumnDefinition Width="6"/>
+                <!-- splitter -->
+                <ColumnDefinition x:Name="LogsColumn" Width="380" MinWidth="220"/>
             </Grid.ColumnDefinitions>
+
 
             <!-- Viewport -->
             <Border Grid.Column="0" Margin="10" CornerRadius="10"
-                    Background="#0f0f0f" BorderBrush="#2a2a2a" BorderThickness="1"
-                    AllowDrop="True"
-                    DragOver="Viewport_DragOver"
-                    Drop="Viewport_Drop">
-                <helix:HelixViewport3D x:Name="View3D"
-                                      Background="#0f0f0f"
-                                      ShowFrameRate="True"
-                                      ShowCoordinateSystem="True"
-                                      ZoomExtentsWhenLoaded="True"/>
+        Background="#0f0f0f" BorderBrush="#2a2a2a" BorderThickness="1"
+        AllowDrop="True"
+        DragOver="Viewport_DragOver"
+        Drop="Viewport_Drop">
+                <Grid>
+                    <helix:HelixViewport3D x:Name="View3D"
+                              Background="#0f0f0f"
+                              ShowFrameRate="True"
+                              ShowCoordinateSystem="True"
+                              ZoomExtentsWhenLoaded="True"/>
+
+                    <!-- Overlay message when no model -->
+                    <Border x:Name="DropOverlay"
+                Background="#66000000"
+                CornerRadius="12"
+                Padding="18"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Visibility="Visible">
+                        <TextBlock Text="Drag &amp; drop a .3ds model here&#x0a;or click Open / Load Template"
+                       Foreground="#f0f0f0"
+                       FontSize="22"
+                       FontWeight="SemiBold"
+                       TextAlignment="Center"/>
+                    </Border>
+                </Grid>
             </Border>
+            <GridSplitter Grid.Column="1"
+              Width="6"
+              HorizontalAlignment="Stretch"
+              VerticalAlignment="Stretch"
+              Background="#1a1a1a"
+              ShowsPreview="True"
+              ResizeBehavior="PreviousAndNext"
+              ResizeDirection="Columns"/>
+
 
             <!-- Logs -->
-            <Border Grid.Column="1" Margin="10,10,10,10" CornerRadius="10"
+            <Border Grid.Column="2" Margin="10,10,10,10" CornerRadius="10"
                     Background="#0f0f0f" BorderBrush="#2a2a2a" BorderThickness="1">
                 <DockPanel>
                     <TextBlock DockPanel.Dock="Top" Padding="10,8" Foreground="#ddd"
