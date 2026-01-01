@@ -1,15 +1,16 @@
-﻿using HelixToolkit.Wpf;
+﻿using GbxSolidTool.Core;
+using HelixToolkit.Wpf;
 using Microsoft.Win32;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Media.Media3D;
-using GbxSolidTool.Core;
-using System.Threading.Tasks;
 
 namespace GbxSolidTool
 {
@@ -26,6 +27,101 @@ namespace GbxSolidTool
 		private readonly ProcessRunner _runner = new();
 		private string? _currentModelPath;
 		private string? _currentWorkDir;
+		private static readonly HashSet<string> KnownMaterials = new(StringComparer.OrdinalIgnoreCase)
+		{
+			"Concrete",
+			"Pavement",
+			"Grass",
+			"Ice",
+			"Metal",
+			"Sand",
+			"Dirt",
+			"Turbo",
+			"DirtRoad",
+			"Rubber",
+			"SlidingRubber",
+			"Test",
+			"Rock",
+			"Water",
+			"Wood",
+			"Danger",
+			"Asphalt",
+			"WetDirtRoad",
+			"WetAsphalt",
+			"WetPavement",
+			"WetGrass",
+			"Snow",
+			"ResonantMetal",
+			"GolfBall",
+			"GolfWall",
+			"GolfGround",
+			"Turbo2",
+			"Bumper",
+			"NotCollidable",
+			"FreeWheeling",
+			"TurboRoulette",
+		};
+		private void ClearLogs()
+		{
+			if (LogBox.Document != null)
+				LogBox.Document.Blocks.Clear();
+		}
+
+		private sealed class FoundMat
+		{
+			public string Name { get; init; } = "Unknown";
+			public List<GeometryModel3D> Geoms { get; } = new();
+		}
+
+		// récupère des noms “utiles” pour chaque GeometryModel3D
+		private static string GuessMaterialName(GeometryModel3D gm, int index)
+		{
+			// Si ton pipeline a déjà des noms dans gm.GetName(), tu peux tenter ça :
+			// var n = gm.GetName(); (extension HelixToolkit, selon versions)
+			// if (!string.IsNullOrWhiteSpace(n)) return n;
+
+			// Sinon fallback: nom générique (mais tu peux améliorer après)
+			return $"Mat_{index}";
+		}
+
+		private List<FoundMat> CollectMaterials(Model3D root)
+		{
+			var geoms = new List<GeometryModel3D>();
+			CollectGeometryModels(root, geoms);
+
+			// 1) grouper par “matériau” (pour l’instant on groupe par instance Material)
+			// 2) donner un nom stable
+			var groups = geoms
+				.Select((gm, i) => new { gm, i })
+				.GroupBy(x => x.gm.Material) // même instance Material => même groupe
+				.Select((g, gi) =>
+				{
+					var fm = new FoundMat
+					{
+						Name = GuessMaterialName(g.First().gm, gi)
+					};
+					foreach (var x in g) fm.Geoms.Add(x.gm);
+					return fm;
+				})
+				.ToList();
+
+			return groups;
+		}
+
+		private void CollectGeometryModels(Model3D model, List<GeometryModel3D> list)
+		{
+			if (model is GeometryModel3D gm)
+			{
+				list.Add(gm);
+				return;
+			}
+
+			if (model is Model3DGroup grp)
+			{
+				foreach (var child in grp.Children)
+					CollectGeometryModels(child, list);
+			}
+		}
 
 
 		public MainWindow()
@@ -38,6 +134,87 @@ namespace GbxSolidTool
 			Log("Ready.");
 			UpdateOverlay();
 		}
+
+		private static Color GetMaterialColor(string name)
+		{
+			// couleurs fixes (tu peux changer)
+			return name.ToLowerInvariant() switch
+			{
+				"metal" => Colors.LightGray,
+				"resonantmetal" => Colors.WhiteSmoke,
+
+				"sand" => Color.FromRgb(214, 158, 46),
+				"dirt" => Color.FromRgb(130, 84, 42),
+				"dirtroad" => Color.FromRgb(150, 110, 70),
+				"wetdirtroad" => Color.FromRgb(110, 80, 60),
+
+				"grass" => Colors.LimeGreen,
+				"wetgrass" => Colors.SeaGreen,
+				"snow" => Colors.AliceBlue,
+				"ice" => Colors.LightBlue,
+
+				"water" => Colors.DodgerBlue,
+
+				"asphalt" => Colors.DimGray,
+				"wetasphalt" => Colors.SlateGray,
+				"pavement" => Colors.Gray,
+				"wetpavement" => Colors.DarkGray,
+				"concrete" => Colors.LightSlateGray,
+
+				"wood" => Color.FromRgb(153, 101, 64),
+				"rock" => Colors.DarkSlateGray,
+
+				"rubber" => Colors.MediumPurple,
+				"slidingrubber" => Colors.HotPink,
+
+				"turbo" => Colors.OrangeRed,
+				"turbo2" => Colors.Orange,
+				"turboroulette" => Colors.Gold,
+
+				"danger" => Colors.Red,
+				"bumper" => Colors.Cyan,
+
+				"notcollidable" => Colors.DarkRed,
+				"freewheeling" => Colors.Khaki,
+
+				"test" => Colors.Magenta,
+
+				"golfball" => Colors.White,
+				"golfwall" => Colors.LightSteelBlue,
+				"golfground" => Colors.PaleGreen,
+
+				_ => Colors.Red // au cas où
+			};
+		}
+		private void LogFoundMaterials(IEnumerable<string> foundMaterials)
+		{
+			var mats = foundMaterials
+				.Where(s => !string.IsNullOrWhiteSpace(s))
+				.Distinct(StringComparer.OrdinalIgnoreCase)
+				.OrderBy(s => s, StringComparer.OrdinalIgnoreCase)
+				.ToList();
+
+			Log("Matériaux détectés :");
+
+			foreach (var m in mats)
+			{
+				if (KnownMaterials.Contains(m))
+				{
+					var col = GetMaterialColor(m);
+					Log(col, $"- {m}");
+				}
+				else
+				{
+					Log(Colors.Red, $"- {m}  [UNKNOWN MATERIAL]");
+				}
+			}
+
+			// Bonus: petit résumé si inconnus
+			var unknown = mats.Where(m => !KnownMaterials.Contains(m)).ToList();
+			if (unknown.Count > 0)
+				Log(Colors.Red, $"⚠ Matériaux inconnus : {unknown.Count}");
+		}
+
 		private string PrepareTemplateForGbxc()
 		{
 			if (_currentWorkDir == null)
@@ -75,6 +252,104 @@ namespace GbxSolidTool
 
 			return dstTemplate;
 		}
+		private sealed class FaceMatGroup
+		{
+			public string MaterialName { get; init; } = "UNKNOWN";
+			public int FaceCount { get; init; }
+		}
+
+		private static List<FaceMatGroup> Extract3dsFaceMaterialGroups(string path)
+		{
+			var bytes = File.ReadAllBytes(path);
+			var groups = new List<FaceMatGroup>();
+
+			ushort U16(int o) => (ushort)(bytes[o] | (bytes[o + 1] << 8));
+			uint U32(int o) => (uint)(bytes[o] | (bytes[o + 1] << 8) | (bytes[o + 2] << 16) | (bytes[o + 3] << 24));
+
+			string ReadZString(ref int o, int end)
+			{
+				int start = o;
+				while (o < end && bytes[o] != 0) o++;
+				var s = Encoding.ASCII.GetString(bytes, start, Math.Max(0, o - start));
+				if (o < end) o++; // skip \0
+				return s;
+			}
+
+			void Walk(int start, int end)
+			{
+				int o = start;
+				while (o + 6 <= end)
+				{
+					ushort cid = U16(o);
+					int len = (int)U32(o + 2);
+					if (len < 6 || o + len > end) break;
+
+					int content = o + 6;
+					int chunkEnd = o + len;
+
+					switch (cid)
+					{
+						case 0x4D4D: // Main
+						case 0x3D3D: // 3D Editor
+						case 0x4100: // TriMesh container
+							Walk(content, chunkEnd);
+							break;
+
+						case 0x4000: // Object block: name(string) + subchunks
+							{
+								int p = content;
+								while (p < chunkEnd && bytes[p] != 0) p++;
+								if (p < chunkEnd) p++; // skip \0
+								if (p < chunkEnd) Walk(p, chunkEnd);
+								break;
+							}
+
+						case 0x4120: // Faces: faceCount + faceRecords + subchunks (dont 0x4130)
+							{
+								// faceCount (ushort) à content
+								if (content + 2 > chunkEnd) break;
+								int faceCount = U16(content);
+
+								// chaque face record fait 8 bytes: a,b,c (ushort*3) + flags (ushort)
+								int faceRecordsBytes = 2 + faceCount * 8;
+								int subStart = content + faceRecordsBytes;
+
+								// Les subchunks commencent après la liste des faces
+								if (subStart < chunkEnd)
+									Walk(subStart, chunkEnd);
+
+								break;
+							}
+
+						case 0x4130: // Face Material group
+							{
+								int t = content;
+								string matName = ReadZString(ref t, chunkEnd);
+
+								int faceCount = 0;
+								if (t + 2 <= chunkEnd)
+								{
+									faceCount = U16(t);
+									// puis faceCount * ushort (indices de faces), qu'on peut ignorer
+								}
+
+								groups.Add(new FaceMatGroup { MaterialName = matName, FaceCount = faceCount });
+								break;
+							}
+
+						default:
+							// ignorer
+							break;
+					}
+
+					o += len;
+				}
+			}
+
+			Walk(0, bytes.Length);
+			return groups;
+		}
+
 
 		private static void CopyDirectoryContents(string sourceDir, string destinationDir)
 		{
@@ -487,6 +762,64 @@ namespace GbxSolidTool
 
 			Log($"Collected XML: moved {moved} file(s) into: {xmlTarget}");
 		}
+		private static List<string> Extract3dsMaterialNames(string path)
+		{
+			var bytes = File.ReadAllBytes(path);
+			var names = new List<string>();
+
+			ushort U16(int o) => (ushort)(bytes[o] | (bytes[o + 1] << 8));
+			uint U32(int o) => (uint)(bytes[o] | (bytes[o + 1] << 8) | (bytes[o + 2] << 16) | (bytes[o + 3] << 24));
+
+			string ReadZString(int start, int end)
+			{
+				int z = start;
+				while (z < end && bytes[z] != 0) z++;
+				return Encoding.ASCII.GetString(bytes, start, Math.Max(0, z - start));
+			}
+
+			void Walk(int start, int end)
+			{
+				int o = start;
+				while (o + 6 <= end)
+				{
+					ushort cid = U16(o);
+					uint len = U32(o + 2);
+					if (len < 6 || o + len > end) break;
+
+					int content = o + 6;
+					int chunkEnd = o + (int)len;
+
+					if (cid == 0xA000) // material name
+					{
+						var n = ReadZString(content, chunkEnd);
+						if (!string.IsNullOrWhiteSpace(n))
+							names.Add(n);
+					}
+
+					// containers
+					if (cid == 0x4D4D || cid == 0x3D3D || cid == 0xAFFF || cid == 0x4100)
+					{
+						Walk(content, chunkEnd);
+					}
+					else if (cid == 0x4000) // object block (name + subchunks)
+					{
+						int z = content;
+						while (z < chunkEnd && bytes[z] != 0) z++;
+						if (z + 1 < chunkEnd)
+							Walk(z + 1, chunkEnd);
+					}
+
+					o += (int)len;
+				}
+			}
+
+			Walk(0, bytes.Length);
+
+			return names
+				.Where(s => !string.IsNullOrWhiteSpace(s))
+				.Distinct(StringComparer.OrdinalIgnoreCase)
+				.ToList();
+		}
 
 		private void TryDeleteEmptyFolders(string root, string keepFolder)
 		{
@@ -542,7 +875,79 @@ namespace GbxSolidTool
 			_currentWorkDir = projectDir;
 			return dst3ds;
 		}
-		
+		private static List<string> Extract3dsObjectMaterials(string path)
+		{
+			var bytes = File.ReadAllBytes(path);
+			var result = new List<string>();
+
+			ushort U16(int o) => (ushort)(bytes[o] | (bytes[o + 1] << 8));
+			uint U32(int o) => (uint)(bytes[o] | (bytes[o + 1] << 8) | (bytes[o + 2] << 16) | (bytes[o + 3] << 24));
+
+			string ReadZString(ref int o)
+			{
+				int start = o;
+				while (bytes[o] != 0) o++;
+				var s = Encoding.ASCII.GetString(bytes, start, o - start);
+				o++; // skip zero
+				return s;
+			}
+
+			void Walk(int start, int end)
+			{
+				int o = start;
+				while (o + 6 <= end)
+				{
+					ushort cid = U16(o);
+					int len = (int)U32(o + 2);
+					if (len < 6) break;
+
+					int content = o + 6;
+					int chunkEnd = o + len;
+
+					if (cid == 0x4000) // Object block
+					{
+						int p = content;
+						ReadZString(ref p); // object name (ignored)
+
+						string? materialForObject = null;
+
+						void WalkObject(int os, int oe)
+						{
+							int x = os;
+							while (x + 6 <= oe)
+							{
+								ushort id = U16(x);
+								int l = (int)U32(x + 2);
+								int c = x + 6;
+
+								if (id == 0x4130) // Face material
+								{
+									int t = c;
+									string mat = ReadZString(ref t);
+									materialForObject ??= mat;
+								}
+
+								x += l;
+							}
+						}
+
+						WalkObject(p, chunkEnd);
+
+						result.Add(materialForObject ?? "UNKNOWN");
+					}
+					else if (cid == 0x4D4D || cid == 0x3D3D)
+					{
+						Walk(content, chunkEnd);
+					}
+
+					o += len;
+				}
+			}
+
+			Walk(0, bytes.Length);
+			return result;
+		}
+
 
 		private void LoadModel(string path)
 		{
@@ -555,39 +960,79 @@ namespace GbxSolidTool
 				}
 
 				Status($"Loading: {path}");
+				ClearLogs();
 				Log($"Load: {path}");
+
+				// Matériaux déclarés dans le .3ds
+				var materialNames = Extract3dsMaterialNames(path);
+				Log($"3DS materials: {materialNames.Count}");
+				LogFoundMaterials(materialNames);
+
+				// Groupes "faces -> matériau" (peut contenir plusieurs entrées par matériau)
+				var faceGroups = Extract3dsFaceMaterialGroups(path);
+				foreach (var g in faceGroups)
+					Log($"group: {g.MaterialName} ({g.FaceCount} faces)");
+
 
 				RemoveCurrentModel();
 
-				// Import
+				// Import Helix
 				var model = _importer.Load(path);
 				_currentModelPath = path;
 
+				// Collect des GeometryModel3D (dans l'ordre de la scène)
+				var geoms = new List<GeometryModel3D>();
+				CollectGeometryModels(model, geoms);
 
-				// Override material color (simple + stable)
-				OverrideMaterialsRecursive(model, MaterialHelper.CreateMaterial(_overrideColor));
+				// Warning si mismatch (utile pour debug)
+				if (geoms.Count != faceGroups.Count)
+				{
+					Log(Colors.Orange, $"WARN: Helix geoms={geoms.Count} vs 3DS groups={faceGroups.Count} (mapping par ordre)");
+				}
+
+				// Appliquer une couleur par "groupe matériau"
+				int n = Math.Min(geoms.Count, faceGroups.Count);
+				for (int i = 0; i < n; i++)
+				{
+					var matName = faceGroups[i].MaterialName;
+
+					var color = KnownMaterials.Contains(matName)
+						? GetMaterialColor(matName)
+						: Colors.Red;
+
+					var mat = MaterialHelper.CreateMaterial(color);
+					geoms[i].Material = mat;
+					geoms[i].BackMaterial = mat;
+				}
+
+				// Si Helix a plus d'objets que de groupes, on met l'override sur le reste
+				if (geoms.Count > n)
+				{
+					var fallback = MaterialHelper.CreateMaterial(_overrideColor);
+					for (int i = n; i < geoms.Count; i++)
+					{
+						geoms[i].Material = fallback;
+						geoms[i].BackMaterial = fallback;
+					}
+				}
 
 				_modelVisual = new ModelVisual3D { Content = model };
 				View3D.Children.Add(_modelVisual);
 
-				// Fit view
 				View3D.ZoomExtents();
-
 				Status($"Loaded: {Path.GetFileName(path)} ({path})");
-
 				UpdateOverlay();
 
-				// If wireframe is checked, rebuild it
 				UpdateWireframe(_wireframeEnabled);
-
 			}
 			catch (Exception ex)
 			{
 				Status("Load failed (see logs).");
 				Log("ERROR: " + ex);
-				MessageBox.Show(ex.Message, "Load failed", MessageBoxButton.OK, MessageBoxImage.Error);
+				MessageBox.Show(ex.ToString(), "Load failed", MessageBoxButton.OK, MessageBoxImage.Error);
 			}
 		}
+
 
 		private void RemoveCurrentModel()
 		{
@@ -684,10 +1129,32 @@ namespace GbxSolidTool
 		}
 
 		private void Status(string text) => StatusText.Text = text;
+		private Paragraph EnsureLogParagraph()
+		{
+			if (LogBox.Document == null)
+				LogBox.Document = new FlowDocument();
 
+			var p = LogBox.Document.Blocks.LastBlock as Paragraph;
+			if (p == null)
+			{
+				p = new Paragraph { Margin = new Thickness(0) };
+				LogBox.Document.Blocks.Add(p);
+			}
+			return p;
+		}
 		private void Log(string text)
 		{
-			LogBox.AppendText(text + Environment.NewLine);
+			var p = EnsureLogParagraph();
+			p.Inlines.Add(new Run(text));
+			p.Inlines.Add(new LineBreak());
+			LogBox.ScrollToEnd();
+		}
+
+		private void Log(Color color, string text)
+		{
+			var p = EnsureLogParagraph();
+			p.Inlines.Add(new Run(text) { Foreground = new SolidColorBrush(color) });
+			p.Inlines.Add(new LineBreak());
 			LogBox.ScrollToEnd();
 		}
 

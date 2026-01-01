@@ -125,16 +125,14 @@
                 <DockPanel>
                     <TextBlock DockPanel.Dock="Top" Padding="10,8" Foreground="#ddd"
                                Text="Logs"/>
-                    <TextBox x:Name="LogBox"
-                             Background="#0f0f0f" Foreground="#cfcfcf"
-                             BorderThickness="0"
-                             FontFamily="Consolas"
-                             FontSize="12"
-                             IsReadOnly="True"
-                             TextWrapping="NoWrap"
-                             VerticalScrollBarVisibility="Auto"
-                             HorizontalScrollBarVisibility="Auto"
-                             />
+                    <RichTextBox x:Name="LogBox"
+                                IsReadOnly="True"
+                                Background="#101010"
+                                Foreground="White"
+                                BorderThickness="0"
+                                VerticalScrollBarVisibility="Auto"
+                                FontFamily="Consolas"
+                                FontSize="12"/>
                 </DockPanel>
             </Border>
         </Grid>
