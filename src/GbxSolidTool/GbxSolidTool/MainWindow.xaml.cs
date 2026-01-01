@@ -38,6 +38,86 @@ namespace GbxSolidTool
 			Log("Ready.");
 			UpdateOverlay();
 		}
+		private string PrepareTemplateForGbxc()
+		{
+			if (_currentWorkDir == null)
+				throw new InvalidOperationException("Work directory not prepared.");
+
+			// Search Template.Solid.xml anywhere under tools/3ds2gbxml
+			var baseDir = Path.Combine(_paths.RepoRoot, "tools", "3ds2gbxml");
+			if (!Directory.Exists(baseDir))
+				throw new DirectoryNotFoundException($"Missing: {baseDir}");
+
+			var solidPath = Directory.GetFiles(baseDir, "Template.Solid.xml", SearchOption.AllDirectories)
+									 .FirstOrDefault();
+
+			if (solidPath == null)
+				throw new FileNotFoundException($"Template.Solid.xml not found under: {baseDir}");
+
+			// This is the "Basic Model" folder (or whatever it is called) that contains Template.Solid.xml
+			var srcTemplateRoot = Path.GetDirectoryName(solidPath)!;
+
+			var dstTemplate = Path.Combine(_currentWorkDir, "template");
+
+			if (Directory.Exists(dstTemplate))
+				Directory.Delete(dstTemplate, recursive: true);
+
+			Directory.CreateDirectory(dstTemplate);
+
+			// Copy CONTENT of srcTemplateRoot into work/.../template/
+			CopyDirectoryContents(srcTemplateRoot, dstTemplate);
+
+			Log($"Template root: {srcTemplateRoot}");
+			Log($"Template copied: {dstTemplate}");
+
+			var solid = Path.Combine(dstTemplate, "Template.Solid.xml");
+			Log(File.Exists(solid) ? "Template.Solid.xml OK" : "WARNING: Template.Solid.xml missing after copy");
+
+			return dstTemplate;
+		}
+
+		private static void CopyDirectoryContents(string sourceDir, string destinationDir)
+		{
+			Directory.CreateDirectory(destinationDir);
+
+			foreach (var file in Directory.GetFiles(sourceDir))
+			{
+				var dst = Path.Combine(destinationDir, Path.GetFileName(file));
+				File.Copy(file, dst, overwrite: true);
+			}
+
+			foreach (var dir in Directory.GetDirectories(sourceDir))
+			{
+				var dst = Path.Combine(destinationDir, Path.GetFileName(dir));
+				CopyDirectory(dir, dst); // tu as déjà CopyDirectory(source, dest)
+			}
+		}
+
+
+		private void InjectXmlIntoTemplate(string templateDir)
+		{
+			var xmlDir = Path.Combine(_currentWorkDir!, "xml");
+			if (!Directory.Exists(xmlDir))
+				throw new DirectoryNotFoundException($"XML folder not found: {xmlDir}");
+
+			foreach (var src in Directory.GetFiles(xmlDir, "*.xml"))
+			{
+				var dst = Path.Combine(templateDir, Path.GetFileName(src));
+				File.Copy(src, dst, overwrite: true);
+			}
+		}
+
+		private static void CopyDirectory(string sourceDir, string destinationDir)
+		{
+			Directory.CreateDirectory(destinationDir);
+
+			foreach (var file in Directory.GetFiles(sourceDir))
+				File.Copy(file, Path.Combine(destinationDir, Path.GetFileName(file)), overwrite: true);
+
+			foreach (var dir in Directory.GetDirectories(sourceDir))
+				CopyDirectory(dir, Path.Combine(destinationDir, Path.GetFileName(dir)));
+		}
+
 		private void LoadTemplate_Click(object sender, RoutedEventArgs e)
 		{
 			try
@@ -272,67 +352,91 @@ namespace GbxSolidTool
 
 		private async void CompileGbx_Click(object sender, RoutedEventArgs e)
 		{
-			if (_currentModelPath == null)
+			try
 			{
-				Status("No model loaded.");
-				return;
-			}
+				if (_currentModelPath == null)
+				{
+					Status("No model loaded.");
+					return;
+				}
 
-			if (!_paths.HasTools(out var msg))
+				if (!_paths.HasTools(out var msg))
+				{
+					Status("Tools missing.");
+					Log(msg);
+					return;
+				}
+
+				if (_currentWorkDir == null)
+				{
+					Status("No work folder yet. Run Convert XML first.");
+					return;
+				}
+
+				var modelName = Path.GetFileNameWithoutExtension(_currentModelPath);
+
+				Log("");
+				Log("=== GBXC (template workflow) ===");
+				Log($"WorkDir: {_currentWorkDir}");
+
+				// 1) Prepare template folder (copy Basic Model CONTENT into work/.../template/)
+				Status("Preparing template...");
+				var templateDir = PrepareTemplateForGbxc();
+				Log($"TemplateDir: {templateDir}");
+
+				// 2) Inject generated XML into template
+				Status("Injecting XML...");
+				InjectXmlIntoTemplate(templateDir);
+
+				// 3) Solid XML path
+				var solidXml = Path.Combine(templateDir, "Template.Solid.xml");
+				Log($"SolidXml: {solidXml}");
+				if (!File.Exists(solidXml))
+				{
+					Status("Template.Solid.xml not found in work/template.");
+					Log($"Missing: {solidXml}");
+					return;
+				}
+
+				// 4) Output
+				var buildDir = Path.Combine(_currentWorkDir, "build");
+				Directory.CreateDirectory(buildDir);
+				var outGbx = Path.Combine(buildDir, $"{modelName}.Solid.gbx");
+
+				// 5) Run GBXC
+				var args = $"\"{_paths.GbxcMain}\" -v -o \"{outGbx}\" \"{solidXml}\"";
+
+				Log($"PY : {_paths.PythonExe}");
+				Log($"CWD: {templateDir}");
+				Log($"CMD: {_paths.PythonExe} {args}");
+				Status("Compiling GBX...");
+
+				int code = await _runner.RunAsync(
+					_paths.PythonExe,
+					args,
+					s => Dispatcher.Invoke(() => Log(s)),
+					s => Dispatcher.Invoke(() => Log("ERR: " + s)),
+					workingDirectory: templateDir
+				);
+
+				Log($"ExitCode: {code}");
+
+				if (code != 0)
+				{
+					Status($"GBX failed (exit {code})");
+					return;
+				}
+
+				Status($"GBX OK: {outGbx}");
+			}
+			catch (Exception ex)
 			{
-				Status("Tools missing.");
-				Log(msg);
-				return;
+				Log("CompileGbx_Click CRASH: " + ex);
+				Status("Compile crashed (see logs).");
+				MessageBox.Show(ex.ToString(), "Compile crash", MessageBoxButton.OK, MessageBoxImage.Error);
 			}
-
-			if (_currentWorkDir == null)
-			{
-				Status("No work folder yet. Run Convert XML first.");
-				return;
-			}
-
-			var modelName = Path.GetFileNameWithoutExtension(_currentModelPath);
-			var xmlDir = Path.Combine(_currentWorkDir, "xml");
-			var buildDir = Path.Combine(_currentWorkDir, "build");
-			Directory.CreateDirectory(buildDir);
-
-			var solidXml = Directory.GetFiles(xmlDir, "*.Solid.xml").FirstOrDefault();
-			if (solidXml == null)
-			{
-				Status("No *.Solid.xml found in work/xml.");
-				Log($"Missing *.Solid.xml in {xmlDir}");
-				return;
-			}
-
-			var outGbx = Path.Combine(buildDir, $"{modelName}.Solid.gbx");
-			var args = $"\"{_paths.GbxcMain}\" -v -o \"{outGbx}\" \"{solidXml}\"";
-
-			Log("");
-			Log("=== GBXC ===");
-			Log($"WORK: {_currentWorkDir}");
-			Log($"CWD : {_currentWorkDir}");
-			Log($"PY  : {_paths.PythonExe}");
-			Log($"CMD : {_paths.PythonExe} {args}");
-			Status("Compiling GBX...");
-
-			int code = await _runner.RunAsync(
-				_paths.PythonExe,
-				args,
-				s => Dispatcher.Invoke(() => Log(s)),
-				s => Dispatcher.Invoke(() => Log("ERR: " + s)),
-				workingDirectory: _currentWorkDir
-			);
-
-			Log($"ExitCode: {code}");
-
-			if (code != 0)
-			{
-				Status($"GBX failed (exit {code})");
-				return;
-			}
-
-			Status($"GBX OK: {outGbx}");
 		}
+
 
 		private void CollectXmlOutputs(string workDir)
 		{
