@@ -13,6 +13,7 @@ namespace GbxSolidTool
 {
 	public partial class MainWindow : Window
 	{
+		private bool _wireframeEnabled;
 		private readonly ModelImporter _importer = new();
 		private ModelVisual3D? _modelVisual;
 		private LinesVisual3D? _wireframe;
@@ -74,8 +75,17 @@ namespace GbxSolidTool
 				LoadModel(path);
 		}
 
-		private void Wireframe_Checked(object sender, RoutedEventArgs e) => UpdateWireframe(true);
-		private void Wireframe_Unchecked(object sender, RoutedEventArgs e) => UpdateWireframe(false);
+		private void Wireframe_Checked(object sender, RoutedEventArgs e)
+		{
+			_wireframeEnabled = true;
+			UpdateWireframe(true);
+		}
+
+		private void Wireframe_Unchecked(object sender, RoutedEventArgs e)
+		{
+			_wireframeEnabled = false;
+			UpdateWireframe(false);
+		}
 
 		private void ColorCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
 		{
@@ -123,11 +133,11 @@ namespace GbxSolidTool
 				// Fit view
 				View3D.ZoomExtents();
 
-				Status($"Loaded: {Path.GetFileName(path)}");
+				Status($"Loaded: {Path.GetFileName(path)} ({path})");
 
 				// If wireframe is checked, rebuild it
-				var wireframeEnabled = IsWireframeChecked();
-				UpdateWireframe(wireframeEnabled);
+				UpdateWireframe(_wireframeEnabled);
+
 			}
 			catch (Exception ex)
 			{
@@ -152,13 +162,7 @@ namespace GbxSolidTool
 			}
 		}
 
-		private bool IsWireframeChecked()
-		{
-			// Find the checkbox by walking visual tree isn’t worth it;
-			// easiest: store state in Tag if you want.
-			// Here: we infer from existence of wireframe (simple).
-			return _wireframe != null;
-		}
+		private bool IsWireframeChecked() => _wireframeEnabled;
 
 		private void UpdateWireframe(bool enabled)
 		{

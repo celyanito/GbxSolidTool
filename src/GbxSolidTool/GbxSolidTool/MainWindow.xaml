@@ -47,7 +47,7 @@
                 </ComboBox>
 
                 <TextBlock Grid.Column="7" VerticalAlignment="Center" Foreground="#888"
-                           Text="Drag and drop a model into the viewport"/>
+                           Text="Drag &amp; drop a model into the viewport"/>
             </Grid>
         </Border>
 
