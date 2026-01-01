@@ -12,66 +12,58 @@
 
         <!-- Top bar -->
         <Border DockPanel.Dock="Top" Background="#1a1a1a" Padding="10">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <!-- Load Template -->
-                    <ColumnDefinition Width="Auto"/>
-                    <!-- Open -->
-                    <ColumnDefinition Width="Auto"/>
-                    <!-- Clear -->
-                    <ColumnDefinition Width="Auto"/>
-                    <!-- Show Logs -->
-                    <ColumnDefinition Width="18"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <!-- Wireframe -->
-                    <ColumnDefinition Width="18"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <!-- Color label -->
-                    <ColumnDefinition Width="Auto"/>
-                    <!-- Color combo -->
-                    <ColumnDefinition Width="*"/>
-                    <!-- spacer -->
-                </Grid.ColumnDefinitions>
+            <DockPanel LastChildFill="True">
 
-                <Button Grid.Column="0" Padding="12,6" Margin="0,0,8,0"
-                Content="Load Template" Click="LoadTemplate_Click"/>
+                <!-- Left buttons -->
+                <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
+                    <Button Padding="12,6" Margin="0,0,8,0"
+                    Content="Load Template" Click="LoadTemplate_Click"/>
 
-                <Button Grid.Column="1" Padding="12,6" Margin="0,0,8,0"
-                Content="Open (.3ds)" Click="Open_Click"/>
+                    <Button Padding="12,6" Margin="0,0,8,0"
+                    Content="Open (.3ds)" Click="Open_Click"/>
 
-                <Button Grid.Column="2" Padding="12,6" Margin="0,0,8,0"
-                Content="Clear" Click="Clear_Click"/>
+                    <Button Padding="12,6" Margin="0,0,8,0"
+                    Content="Clear" Click="Clear_Click"/>
 
-                <Button Grid.Column="3" Padding="12,6" Margin="0,0,8,0"
-                Content="Show Logs" Click="ToggleLogs_Click"/>
-                <Button x:Name="ToggleLogsButton"
-                        Grid.Column="3"
-                        Padding="12,6"
-                        Margin="0,0,8,0"
-                        Content="Show Logs"
-                        Click="ToggleLogs_Click"/>
+                    <StackPanel Orientation="Vertical" Margin="0,0,8,0">
+                        <Button Padding="12,6"
+            Content="Convert XML" Click="ConvertXml_Click"/>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,4,0,0">
+                            <CheckBox x:Name="Cb3dsVisual" Content="-v" Foreground="#ddd" Margin="0,0,8,0"/>
+                            <CheckBox x:Name="Cb3dsSurface" Content="-s" Foreground="#ddd"/>
+                        </StackPanel>
+                    </StackPanel>
 
 
-                <CheckBox Grid.Column="5" VerticalAlignment="Center"
-                  Content="Wireframe" Foreground="#ddd"
-                  Checked="Wireframe_Checked" Unchecked="Wireframe_Unchecked"/>
+                    <Button Padding="12,6" Margin="0,0,8,0"
+                    Content="Compile GBX" Click="CompileGbx_Click"/>
 
-                <TextBlock Grid.Column="7" VerticalAlignment="Center" Foreground="#bbb" Margin="0,0,8,0"
-                   Text="Color:"/>
+                    <Button x:Name="ToggleLogsButton" Padding="12,6" Margin="0,0,8,0"
+                    Content="Hide Logs" Click="ToggleLogs_Click"/>
+                </StackPanel>
 
-                <ComboBox Grid.Column="8" Width="160" SelectedIndex="0"
-                  SelectionChanged="ColorCombo_SelectionChanged">
-                    <ComboBoxItem Content="LightGray"/>
-                    <ComboBoxItem Content="White"/>
-                    <ComboBoxItem Content="Orange"/>
-                    <ComboBoxItem Content="HotPink"/>
-                    <ComboBoxItem Content="Cyan"/>
-                    <ComboBoxItem Content="Lime"/>
-                </ComboBox>
-            </Grid>
+                <!-- Right controls -->
+                <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
+                    <CheckBox Margin="0,0,12,0" VerticalAlignment="Center"
+                      Content="Wireframe" Foreground="#ddd"
+                      Checked="Wireframe_Checked" Unchecked="Wireframe_Unchecked"/>
+
+                    <TextBlock VerticalAlignment="Center" Foreground="#bbb" Margin="0,0,8,0"
+                       Text="Color:"/>
+
+                    <ComboBox Width="160" SelectedIndex="0"
+                      SelectionChanged="ColorCombo_SelectionChanged">
+                        <ComboBoxItem Content="LightGray"/>
+                        <ComboBoxItem Content="White"/>
+                        <ComboBoxItem Content="Orange"/>
+                        <ComboBoxItem Content="HotPink"/>
+                        <ComboBoxItem Content="Cyan"/>
+                        <ComboBoxItem Content="Lime"/>
+                    </ComboBox>
+                </StackPanel>
+
+            </DockPanel>
         </Border>
-
 
         <!-- Bottom status -->
         <Border DockPanel.Dock="Bottom" Background="#1a1a1a" Padding="8">

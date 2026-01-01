@@ -9,6 +9,7 @@ using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Media3D;
 using GbxSolidTool.Core;
+using System.Threading.Tasks;
 
 namespace GbxSolidTool
 {
@@ -22,6 +23,9 @@ namespace GbxSolidTool
 		private readonly AppPaths _paths = new(); 
 		private bool _logsVisible = true;
 		private GridLength _lastLogsWidth = new GridLength(380);
+		private readonly ProcessRunner _runner = new();
+		private string? _currentModelPath;
+		private string? _currentWorkDir;
 
 
 		public MainWindow()
@@ -214,6 +218,227 @@ namespace GbxSolidTool
 
 			ApplyOverrideMaterial();
 		}
+		private async void ConvertXml_Click(object sender, RoutedEventArgs e)
+		{
+			if (_currentModelPath == null)
+			{
+				Status("No model loaded.");
+				return;
+			}
+
+			if (!_paths.HasTools(out var msg))
+			{
+				Status("Tools missing.");
+				Log(msg);
+				return;
+			}
+
+			// Prépare work\<Model>\{input,xml,build} et copie le .3ds dans input\
+			var work3ds = PrepareWorkDirForModel(_currentModelPath);
+
+			// Flags depuis UI
+			var flags = new List<string>();
+			if (Cb3dsVisual.IsChecked == true) flags.Add("-v");
+			if (Cb3dsSurface.IsChecked == true) flags.Add("-s");
+
+			var args = $"\"{_paths.ThreeDs2Gbxml}\" {string.Join(" ", flags)} \"{work3ds}\"";
+
+			Log("");
+			Log("=== 3ds2gbxml ===");
+			Log($"WORK: {_currentWorkDir}");
+			Log($"CWD : {_currentWorkDir}");
+			Log($"CMD : {_paths.PythonExe} {args}");
+			Status("Converting to XML...");
+
+			int code = await _runner.RunAsync(
+				_paths.PythonExe,
+				args,
+				s => Dispatcher.Invoke(() => Log(s)),
+				s => Dispatcher.Invoke(() => Log("ERR: " + s)),
+				workingDirectory: _currentWorkDir
+			);
+
+			Log($"ExitCode: {code}");
+
+			if (code != 0)
+			{
+				Status($"XML failed (exit {code})");
+				return;
+			}
+
+			CollectXmlOutputs(_currentWorkDir!);
+			Status($"XML OK: {_currentWorkDir}\\xml");
+		}
+
+		private async void CompileGbx_Click(object sender, RoutedEventArgs e)
+		{
+			if (_currentModelPath == null)
+			{
+				Status("No model loaded.");
+				return;
+			}
+
+			if (!_paths.HasTools(out var msg))
+			{
+				Status("Tools missing.");
+				Log(msg);
+				return;
+			}
+
+			if (_currentWorkDir == null)
+			{
+				Status("No work folder yet. Run Convert XML first.");
+				return;
+			}
+
+			var modelName = Path.GetFileNameWithoutExtension(_currentModelPath);
+			var xmlDir = Path.Combine(_currentWorkDir, "xml");
+			var buildDir = Path.Combine(_currentWorkDir, "build");
+			Directory.CreateDirectory(buildDir);
+
+			var solidXml = Directory.GetFiles(xmlDir, "*.Solid.xml").FirstOrDefault();
+			if (solidXml == null)
+			{
+				Status("No *.Solid.xml found in work/xml.");
+				Log($"Missing *.Solid.xml in {xmlDir}");
+				return;
+			}
+
+			var outGbx = Path.Combine(buildDir, $"{modelName}.Solid.gbx");
+			var args = $"\"{_paths.GbxcMain}\" -v -o \"{outGbx}\" \"{solidXml}\"";
+
+			Log("");
+			Log("=== GBXC ===");
+			Log($"WORK: {_currentWorkDir}");
+			Log($"CWD : {_currentWorkDir}");
+			Log($"PY  : {_paths.PythonExe}");
+			Log($"CMD : {_paths.PythonExe} {args}");
+			Status("Compiling GBX...");
+
+			int code = await _runner.RunAsync(
+				_paths.PythonExe,
+				args,
+				s => Dispatcher.Invoke(() => Log(s)),
+				s => Dispatcher.Invoke(() => Log("ERR: " + s)),
+				workingDirectory: _currentWorkDir
+			);
+
+			Log($"ExitCode: {code}");
+
+			if (code != 0)
+			{
+				Status($"GBX failed (exit {code})");
+				return;
+			}
+
+			Status($"GBX OK: {outGbx}");
+		}
+
+		private void CollectXmlOutputs(string workDir)
+		{
+			var xmlTarget = Path.Combine(workDir, "xml");
+			Directory.CreateDirectory(xmlTarget);
+
+			bool IsInsideXmlFolder(string path)
+			{
+				var rel = Path.GetRelativePath(workDir, path);
+				var first = rel.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+							   .FirstOrDefault();
+				return string.Equals(first, "xml", StringComparison.OrdinalIgnoreCase);
+			}
+
+			// On prend tous les XML sous workDir, sauf ceux déjà dans workDir\xml\
+			var xmlFiles = Directory.GetFiles(workDir, "*.xml", SearchOption.AllDirectories)
+									.Where(p => !IsInsideXmlFolder(p))
+									.ToList();
+
+			int moved = 0;
+
+			foreach (var src in xmlFiles)
+			{
+				var dst = Path.Combine(xmlTarget, Path.GetFileName(src));
+
+				try
+				{
+					// Si destination existe déjà, on l’écrase
+					if (File.Exists(dst))
+						File.Delete(dst);
+
+					// Move (pas Copy) => plus de doublon
+					File.Move(src, dst);
+					moved++;
+				}
+				catch (Exception ex)
+				{
+					// fallback: si move échoue (verrou, etc.), on copie puis on essaie de supprimer
+					Log($"WARN: move failed for {src} -> {dst} ({ex.Message}), trying copy+delete");
+					File.Copy(src, dst, overwrite: true);
+					try { File.Delete(src); } catch { /* ignore */ }
+					moved++;
+				}
+			}
+
+			// Nettoyage: supprime dossiers vides (optionnel)
+			TryDeleteEmptyFolders(workDir, xmlTarget);
+
+			Log($"Collected XML: moved {moved} file(s) into: {xmlTarget}");
+		}
+
+		private void TryDeleteEmptyFolders(string root, string keepFolder)
+		{
+			try
+			{
+				foreach (var dir in Directory.GetDirectories(root, "*", SearchOption.AllDirectories)
+											 .OrderByDescending(d => d.Length))
+				{
+					if (string.Equals(Path.GetFullPath(dir).TrimEnd('\\'),
+									  Path.GetFullPath(keepFolder).TrimEnd('\\'),
+									  StringComparison.OrdinalIgnoreCase))
+						continue;
+
+					// ne supprime pas build/input/xml
+					var name = new DirectoryInfo(dir).Name;
+					if (name.Equals("input", StringComparison.OrdinalIgnoreCase) ||
+						name.Equals("xml", StringComparison.OrdinalIgnoreCase) ||
+						name.Equals("build", StringComparison.OrdinalIgnoreCase))
+						continue;
+
+					if (!Directory.EnumerateFileSystemEntries(dir).Any())
+						Directory.Delete(dir, false);
+				}
+			}
+			catch
+			{
+				// nettoyage best-effort, on ne bloque pas
+			}
+		}
+
+
+		// Variante "unique" (si tu veux un dossier différent à chaque run)
+		private string PrepareWorkDirForModel(string source3dsPath)
+		{
+			var name = Path.GetFileNameWithoutExtension(source3dsPath);
+			var workRoot = Path.Combine(_paths.RepoRoot, "work");
+			Directory.CreateDirectory(workRoot);
+
+			var stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+			var projectDir = Path.Combine(workRoot, $"{name}_{stamp}");
+
+			var inputDir = Path.Combine(projectDir, "input");
+			var xmlDir   = Path.Combine(projectDir, "xml");
+			var buildDir = Path.Combine(projectDir, "build");
+
+			Directory.CreateDirectory(inputDir);
+			Directory.CreateDirectory(xmlDir);
+			Directory.CreateDirectory(buildDir);
+
+			var dst3ds = Path.Combine(inputDir, Path.GetFileName(source3dsPath));
+			File.Copy(source3dsPath, dst3ds, overwrite: true);
+
+			_currentWorkDir = projectDir;
+			return dst3ds;
+		}
+		
 
 		private void LoadModel(string path)
 		{
@@ -232,6 +457,8 @@ namespace GbxSolidTool
 
 				// Import
 				var model = _importer.Load(path);
+				_currentModelPath = path;
+
 
 				// Override material color (simple + stable)
 				OverrideMaterialsRecursive(model, MaterialHelper.CreateMaterial(_overrideColor));
