@@ -28,6 +28,57 @@ namespace GbxSolidTool
 		private readonly ProcessRunner _runner = new();
 		private string? _currentModelPath;
 		private string? _currentWorkDir;
+		private sealed class MaterialFaceInfo
+		{
+			public string Name { get; init; } = "UNKNOWN";
+			public int FaceCount { get; init; }
+		}
+
+		private void LogDetectedMaterialsWithFaces(List<string> declaredMaterials, List<FaceMatGroup> faceGroups)
+		{
+			// Agrège le total de faces par matériau depuis 0x4130
+			var facesPerMaterial = faceGroups
+				.Where(g => !string.IsNullOrWhiteSpace(g.MaterialName))
+				.GroupBy(g => g.MaterialName, StringComparer.OrdinalIgnoreCase)
+				.Select(g => new MaterialFaceInfo
+				{
+					Name = g.Key,
+					FaceCount = g.Sum(x => x.FaceCount)
+				})
+				.OrderByDescending(x => x.FaceCount)
+				.ThenBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
+				.ToList();
+
+			var usedMaterials = facesPerMaterial.Select(x => x.Name).ToList();
+
+			Log($"3DS materials (declared 0xA000): {declaredMaterials.Count}");
+			Log($"3DS materials (used 0x4130): {usedMaterials.Count}");
+
+			// Tu voulais “mets le en rouge” => warning rouge si A000 absent mais 4130 présent
+			if (declaredMaterials.Count == 0 && usedMaterials.Count > 0)
+				Log(Colors.Red, "⚠ WARNING: no material blocks (0xA000) found — using face material groups (0x4130)");
+
+			Log("Matériaux détectés :");
+
+			// On affiche la liste basée sur 0x4130 (car c'est ça qui porte les faces)
+			foreach (var m in facesPerMaterial)
+			{
+				if (KnownMaterials.Contains(m.Name))
+				{
+					var col = GetMaterialColor(m.Name);
+					Log(col, $"- {m.Name} ({m.FaceCount} faces)");
+				}
+				else
+				{
+					Log(Colors.Red, $"- {m.Name} ({m.FaceCount} faces)  [UNKNOWN MATERIAL]");
+				}
+			}
+
+			var unknown = facesPerMaterial.Where(x => !KnownMaterials.Contains(x.Name)).Select(x => x.Name).ToList();
+			if (unknown.Count > 0)
+				Log(Colors.Red, $"⚠ Matériaux inconnus : {unknown.Count}");
+		}
+
 		private static readonly HashSet<string> KnownMaterials = new(StringComparer.OrdinalIgnoreCase)
 		{
 			"Concrete",
@@ -1025,12 +1076,16 @@ namespace GbxSolidTool
 				// Matériaux déclarés dans le .3ds
 				var materialNames = Extract3dsMaterialNames(path);
 				Log($"3DS materials: {materialNames.Count}");
-				LogFoundMaterials(materialNames);
 
-				// Groupes "faces -> matériau" (peut contenir plusieurs entrées par matériau)
+				// Matériaux déclarés dans le .3ds (0xA000)
+				var declaredMaterials = Extract3dsMaterialNames(path);
+
+				// Groupes faces->matériau (0x4130)
 				var faceGroups = Extract3dsFaceMaterialGroups(path);
-				foreach (var g in faceGroups)
-					Log($"group: {g.MaterialName} ({g.FaceCount} faces)");
+
+				// Logs: liste matériaux + faces (sans lignes group:)
+				LogDetectedMaterialsWithFaces(declaredMaterials, faceGroups);
+
 
 
 				RemoveCurrentModel();
