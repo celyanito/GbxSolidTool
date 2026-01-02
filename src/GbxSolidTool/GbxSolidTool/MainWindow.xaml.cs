@@ -1,4 +1,6 @@
 ﻿using GbxSolidTool.Core;
+using GbxSolidTool.Models;
+using GbxSolidTool.Services;
 using HelixToolkit.Wpf;
 using Microsoft.Win32;
 using System;
@@ -19,461 +21,109 @@ namespace GbxSolidTool
 	{
 		private bool _wireframeEnabled;
 		private readonly ModelImporter _importer = new();
-		private ModelVisual3D? _modelVisual;
-		private LinesVisual3D? _wireframe;
 		private Color _overrideColor = Colors.LightGray;
-		private readonly AppPaths _paths = new(); 
-		private bool _logsVisible = true;
-		private GridLength _lastLogsWidth = new GridLength(380);
+
+		private readonly AppPaths _paths = new();
 		private readonly ProcessRunner _runner = new();
+
 		private string? _currentModelPath;
 		private string? _currentWorkDir;
-		private sealed class MaterialFaceInfo
-		{
-			public string Name { get; init; } = "UNKNOWN";
-			public int FaceCount { get; init; }
-		}
 
-		private void LogDetectedMaterialsWithFaces(List<string> declaredMaterials, List<FaceMatGroup> faceGroups)
-		{
-			// Agrège le total de faces par matériau depuis 0x4130
-			var facesPerMaterial = faceGroups
-				.Where(g => !string.IsNullOrWhiteSpace(g.MaterialName))
-				.GroupBy(g => g.MaterialName, StringComparer.OrdinalIgnoreCase)
-				.Select(g => new MaterialFaceInfo
-				{
-					Name = g.Key,
-					FaceCount = g.Sum(x => x.FaceCount)
-				})
-				.OrderByDescending(x => x.FaceCount)
-				.ThenBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
-				.ToList();
+		private bool _logsVisible = true;
+		private GridLength _lastLogsWidth = new GridLength(380);
 
-			var usedMaterials = facesPerMaterial.Select(x => x.Name).ToList();
-
-			Log($"3DS materials (declared 0xA000): {declaredMaterials.Count}");
-			Log($"3DS materials (used 0x4130): {usedMaterials.Count}");
-
-			// TrackMania rule: A000 blocks must NOT be present.
-			// If A000 is detected, the export is incorrect (should use GreffMASTER addon).
-			if (declaredMaterials.Count > 0)
-			{
-				Log(Colors.Orange,
-					$"⚠ WARNING: {declaredMaterials.Count} material block(s) (0xA000) detected.\n" +
-					"  TrackMania requires NO A000 blocks.\n" +
-					"  Re-export the model using GreffMASTER's Blender addon.");
-			}
-
-
-			Log("Matériaux détectés :");
-
-			// On affiche la liste basée sur 0x4130 (car c'est ça qui porte les faces)
-			foreach (var m in facesPerMaterial)
-			{
-				if (KnownMaterials.Contains(m.Name))
-				{
-					var col = GetMaterialColor(m.Name);
-					Log(col, $"- {m.Name} ({m.FaceCount} faces)");
-				}
-				else
-				{
-					Log(Colors.Red, $"- {m.Name} ({m.FaceCount} faces)  [UNKNOWN MATERIAL]");
-				}
-			}
-
-			var unknown = facesPerMaterial.Where(x => !KnownMaterials.Contains(x.Name)).Select(x => x.Name).ToList();
-			if (unknown.Count > 0)
-				Log(Colors.Red, $"⚠ Matériaux inconnus : {unknown.Count}");
-		}
-
-		private static readonly HashSet<string> KnownMaterials = new(StringComparer.OrdinalIgnoreCase)
-		{
-			"Concrete",
-			"Pavement",
-			"Grass",
-			"Ice",
-			"Metal",
-			"Sand",
-			"Dirt",
-			"Turbo",
-			"DirtRoad",
-			"Rubber",
-			"SlidingRubber",
-			"Test",
-			"Rock",
-			"Water",
-			"Wood",
-			"Danger",
-			"Asphalt",
-			"WetDirtRoad",
-			"WetAsphalt",
-			"WetPavement",
-			"WetGrass",
-			"Snow",
-			"ResonantMetal",
-			"GolfBall",
-			"GolfWall",
-			"GolfGround",
-			"Turbo2",
-			"Bumper",
-			"NotCollidable",
-			"FreeWheeling",
-			"TurboRoulette",
-		};
-		private void ClearLogs()
-		{
-			if (LogBox.Document != null)
-				LogBox.Document.Blocks.Clear();
-		}
-		private void LogOk(string text) => Log(Colors.LimeGreen, "✓ " + text);
-		private void LogErr(string text) => Log(Colors.Red, "✗ " + text);
-		private void LogWarn(string text) => Log(Colors.Orange, "! " + text);
-
-		private static List<string> SafeListFiles(string folder, string pattern)
-		{
-			try
-			{
-				if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
-					return new List<string>();
-				return Directory.GetFiles(folder, pattern, SearchOption.TopDirectoryOnly).ToList();
-			}
-			catch
-			{
-				return new List<string>();
-			}
-		}
-
-		private sealed class FoundMat
-		{
-			public string Name { get; init; } = "Unknown";
-			public List<GeometryModel3D> Geoms { get; } = new();
-		}
-
-		// récupère des noms “utiles” pour chaque GeometryModel3D
-		private static string GuessMaterialName(GeometryModel3D gm, int index)
-		{
-			// Si ton pipeline a déjà des noms dans gm.GetName(), tu peux tenter ça :
-			// var n = gm.GetName(); (extension HelixToolkit, selon versions)
-			// if (!string.IsNullOrWhiteSpace(n)) return n;
-
-			// Sinon fallback: nom générique (mais tu peux améliorer après)
-			return $"Mat_{index}";
-		}
-
-		private List<FoundMat> CollectMaterials(Model3D root)
-		{
-			var geoms = new List<GeometryModel3D>();
-			CollectGeometryModels(root, geoms);
-
-			// 1) grouper par “matériau” (pour l’instant on groupe par instance Material)
-			// 2) donner un nom stable
-			var groups = geoms
-				.Select((gm, i) => new { gm, i })
-				.GroupBy(x => x.gm.Material) // même instance Material => même groupe
-				.Select((g, gi) =>
-				{
-					var fm = new FoundMat
-					{
-						Name = GuessMaterialName(g.First().gm, gi)
-					};
-					foreach (var x in g) fm.Geoms.Add(x.gm);
-					return fm;
-				})
-				.ToList();
-
-			return groups;
-		}
-
-		private void CollectGeometryModels(Model3D model, List<GeometryModel3D> list)
-		{
-			if (model is GeometryModel3D gm)
-			{
-				list.Add(gm);
-				return;
-			}
-
-			if (model is Model3DGroup grp)
-			{
-				foreach (var child in grp.Children)
-					CollectGeometryModels(child, list);
-			}
-		}
-
+		private readonly ViewportService _viewport;
+		private readonly WorkDirService _work;
+		private readonly TemplateService _template;
 
 		public MainWindow()
 		{
 			InitializeComponent();
 
-			// Lights (sinon écran noir)
-			View3D.Children.Add(new DefaultLights());
+			_viewport = new ViewportService(View3D);
+			_viewport.EnsureLights();
+
+			_work = new WorkDirService(_paths, s => Log(s));
+			_template = new TemplateService(_paths, s => Log(s));
 
 			Log("Ready.");
 			UpdateOverlay();
 		}
 
-		private static Color GetMaterialColor(string name)
+		// ---------------- UI helpers ----------------
+
+		private void Status(string text) => StatusText.Text = text;
+
+		private void ClearLogs()
 		{
-			// couleurs fixes (tu peux changer)
-			return name.ToLowerInvariant() switch
-			{
-				"metal" => Colors.LightGray,
-				"resonantmetal" => Colors.WhiteSmoke,
-
-				"sand" => Color.FromRgb(214, 158, 46),
-				"dirt" => Color.FromRgb(130, 84, 42),
-				"dirtroad" => Color.FromRgb(150, 110, 70),
-				"wetdirtroad" => Color.FromRgb(110, 80, 60),
-
-				"grass" => Colors.LimeGreen,
-				"wetgrass" => Colors.SeaGreen,
-				"snow" => Colors.AliceBlue,
-				"ice" => Colors.LightBlue,
-
-				"water" => Colors.DodgerBlue,
-
-				"asphalt" => Colors.DimGray,
-				"wetasphalt" => Colors.SlateGray,
-				"pavement" => Colors.Gray,
-				"wetpavement" => Colors.DarkGray,
-				"concrete" => Colors.LightSlateGray,
-
-				"wood" => Color.FromRgb(153, 101, 64),
-				"rock" => Colors.DarkSlateGray,
-
-				"rubber" => Colors.MediumPurple,
-				"slidingrubber" => Colors.HotPink,
-
-				"turbo" => Colors.OrangeRed,
-				"turbo2" => Colors.Orange,
-				"turboroulette" => Colors.Gold,
-
-				"danger" => Colors.Red,
-				"bumper" => Colors.Cyan,
-
-				"notcollidable" => Colors.DarkRed,
-				"freewheeling" => Colors.Khaki,
-
-				"test" => Colors.Magenta,
-
-				"golfball" => Colors.White,
-				"golfwall" => Colors.LightSteelBlue,
-				"golfground" => Colors.PaleGreen,
-
-				_ => Colors.Red // au cas où
-			};
+			if (LogBox.Document != null)
+				LogBox.Document.Blocks.Clear();
 		}
-		private void LogFoundMaterials(IEnumerable<string> foundMaterials)
+
+		private void LogOk(string text) => Log(Colors.LimeGreen, "✓ " + text);
+		private void LogErr(string text) => Log(Colors.Red, "✗ " + text);
+		private void LogWarn(string text) => Log(Colors.Orange, "! " + text);
+
+		private Paragraph EnsureLogParagraph()
 		{
-			var mats = foundMaterials
-				.Where(s => !string.IsNullOrWhiteSpace(s))
-				.Distinct(StringComparer.OrdinalIgnoreCase)
-				.OrderBy(s => s, StringComparer.OrdinalIgnoreCase)
-				.ToList();
+			if (LogBox.Document == null)
+				LogBox.Document = new FlowDocument();
 
-			Log("Matériaux détectés :");
-
-			foreach (var m in mats)
+			var p = LogBox.Document.Blocks.LastBlock as Paragraph;
+			if (p == null)
 			{
-				if (KnownMaterials.Contains(m))
-				{
-					var col = GetMaterialColor(m);
-					Log(col, $"- {m}");
-				}
-				else
-				{
-					Log(Colors.Red, $"- {m}  [UNKNOWN MATERIAL]");
-				}
+				p = new Paragraph { Margin = new Thickness(0) };
+				LogBox.Document.Blocks.Add(p);
+			}
+			return p;
+		}
+
+		private void Log(string text)
+		{
+			var p = EnsureLogParagraph();
+			p.Inlines.Add(new Run(text));
+			p.Inlines.Add(new LineBreak());
+			LogBox.ScrollToEnd();
+		}
+
+		private void Log(Color color, string text)
+		{
+			var p = EnsureLogParagraph();
+			p.Inlines.Add(new Run(text) { Foreground = new SolidColorBrush(color) });
+			p.Inlines.Add(new LineBreak());
+			LogBox.ScrollToEnd();
+		}
+
+		private void UpdateOverlay()
+		{
+			DropOverlay.Visibility = _viewport.HasModel ? Visibility.Collapsed : Visibility.Visible;
+		}
+
+		private void SetLogsVisible(bool visible)
+		{
+			_logsVisible = visible;
+
+			if (visible)
+			{
+				LogsColumn.Width = (_lastLogsWidth.Value < 1) ? new GridLength(380) : _lastLogsWidth;
+				LogsColumn.MinWidth = 220;
+			}
+			else
+			{
+				_lastLogsWidth = LogsColumn.Width;
+				LogsColumn.MinWidth = 0;
+				LogsColumn.Width = new GridLength(0);
 			}
 
-			// Bonus: petit résumé si inconnus
-			var unknown = mats.Where(m => !KnownMaterials.Contains(m)).ToList();
-			if (unknown.Count > 0)
-				Log(Colors.Red, $"⚠ Matériaux inconnus : {unknown.Count}");
+			ToggleLogsButton.Content = visible ? "Hide Logs" : "Show Logs";
 		}
 
-		private string PrepareTemplateForGbxc()
-		{
-			if (_currentWorkDir == null)
-				throw new InvalidOperationException("Work directory not prepared.");
-
-			// Search Template.Solid.xml anywhere under tools/3ds2gbxml
-			var baseDir = Path.Combine(_paths.RepoRoot, "tools", "3ds2gbxml");
-			if (!Directory.Exists(baseDir))
-				throw new DirectoryNotFoundException($"Missing: {baseDir}");
-
-			var solidPath = Directory.GetFiles(baseDir, "Template.Solid.xml", SearchOption.AllDirectories)
-									 .FirstOrDefault();
-
-			if (solidPath == null)
-				throw new FileNotFoundException($"Template.Solid.xml not found under: {baseDir}");
-
-			// This is the "Basic Model" folder (or whatever it is called) that contains Template.Solid.xml
-			var srcTemplateRoot = Path.GetDirectoryName(solidPath)!;
-
-			var dstTemplate = Path.Combine(_currentWorkDir, "template");
-
-			if (Directory.Exists(dstTemplate))
-				Directory.Delete(dstTemplate, recursive: true);
-
-			Directory.CreateDirectory(dstTemplate);
-
-			// Copy CONTENT of srcTemplateRoot into work/.../template/
-			CopyDirectoryContents(srcTemplateRoot, dstTemplate);
-
-			Log($"Template root: {srcTemplateRoot}");
-			Log($"Template copied: {dstTemplate}");
-
-			var solid = Path.Combine(dstTemplate, "Template.Solid.xml");
-			Log(File.Exists(solid) ? "Template.Solid.xml OK" : "WARNING: Template.Solid.xml missing after copy");
-
-			return dstTemplate;
-		}
-		private sealed class FaceMatGroup
-		{
-			public string MaterialName { get; init; } = "UNKNOWN";
-			public int FaceCount { get; init; }
-		}
-
-		private static List<FaceMatGroup> Extract3dsFaceMaterialGroups(string path)
-		{
-			var bytes = File.ReadAllBytes(path);
-			var groups = new List<FaceMatGroup>();
-
-			ushort U16(int o) => (ushort)(bytes[o] | (bytes[o + 1] << 8));
-			uint U32(int o) => (uint)(bytes[o] | (bytes[o + 1] << 8) | (bytes[o + 2] << 16) | (bytes[o + 3] << 24));
-
-			string ReadZString(ref int o, int end)
-			{
-				int start = o;
-				while (o < end && bytes[o] != 0) o++;
-				var s = Encoding.ASCII.GetString(bytes, start, Math.Max(0, o - start));
-				if (o < end) o++; // skip \0
-				return s;
-			}
-
-			void Walk(int start, int end)
-			{
-				int o = start;
-				while (o + 6 <= end)
-				{
-					ushort cid = U16(o);
-					int len = (int)U32(o + 2);
-					if (len < 6 || o + len > end) break;
-
-					int content = o + 6;
-					int chunkEnd = o + len;
-
-					switch (cid)
-					{
-						case 0x4D4D: // Main
-						case 0x3D3D: // 3D Editor
-						case 0x4100: // TriMesh container
-							Walk(content, chunkEnd);
-							break;
-
-						case 0x4000: // Object block: name(string) + subchunks
-							{
-								int p = content;
-								while (p < chunkEnd && bytes[p] != 0) p++;
-								if (p < chunkEnd) p++; // skip \0
-								if (p < chunkEnd) Walk(p, chunkEnd);
-								break;
-							}
-
-						case 0x4120: // Faces: faceCount + faceRecords + subchunks (dont 0x4130)
-							{
-								// faceCount (ushort) à content
-								if (content + 2 > chunkEnd) break;
-								int faceCount = U16(content);
-
-								// chaque face record fait 8 bytes: a,b,c (ushort*3) + flags (ushort)
-								int faceRecordsBytes = 2 + faceCount * 8;
-								int subStart = content + faceRecordsBytes;
-
-								// Les subchunks commencent après la liste des faces
-								if (subStart < chunkEnd)
-									Walk(subStart, chunkEnd);
-
-								break;
-							}
-
-						case 0x4130: // Face Material group
-							{
-								int t = content;
-								string matName = ReadZString(ref t, chunkEnd);
-
-								int faceCount = 0;
-								if (t + 2 <= chunkEnd)
-								{
-									faceCount = U16(t);
-									// puis faceCount * ushort (indices de faces), qu'on peut ignorer
-								}
-
-								groups.Add(new FaceMatGroup { MaterialName = matName, FaceCount = faceCount });
-								break;
-							}
-
-						default:
-							// ignorer
-							break;
-					}
-
-					o += len;
-				}
-			}
-
-			Walk(0, bytes.Length);
-			return groups;
-		}
-
-
-		private static void CopyDirectoryContents(string sourceDir, string destinationDir)
-		{
-			Directory.CreateDirectory(destinationDir);
-
-			foreach (var file in Directory.GetFiles(sourceDir))
-			{
-				var dst = Path.Combine(destinationDir, Path.GetFileName(file));
-				File.Copy(file, dst, overwrite: true);
-			}
-
-			foreach (var dir in Directory.GetDirectories(sourceDir))
-			{
-				var dst = Path.Combine(destinationDir, Path.GetFileName(dir));
-				CopyDirectory(dir, dst); // tu as déjà CopyDirectory(source, dest)
-			}
-		}
-
-
-		private void InjectXmlIntoTemplate(string templateDir)
-		{
-			var xmlDir = Path.Combine(_currentWorkDir!, "xml");
-			if (!Directory.Exists(xmlDir))
-				throw new DirectoryNotFoundException($"XML folder not found: {xmlDir}");
-
-			foreach (var src in Directory.GetFiles(xmlDir, "*.xml"))
-			{
-				var dst = Path.Combine(templateDir, Path.GetFileName(src));
-				File.Copy(src, dst, overwrite: true);
-			}
-		}
-
-		private static void CopyDirectory(string sourceDir, string destinationDir)
-		{
-			Directory.CreateDirectory(destinationDir);
-
-			foreach (var file in Directory.GetFiles(sourceDir))
-				File.Copy(file, Path.Combine(destinationDir, Path.GetFileName(file)), overwrite: true);
-
-			foreach (var dir in Directory.GetDirectories(sourceDir))
-				CopyDirectory(dir, Path.Combine(destinationDir, Path.GetFileName(dir)));
-		}
+		// ---------------- UI events ----------------
 
 		private void LoadTemplate_Click(object sender, RoutedEventArgs e)
 		{
 			try
 			{
-				// Repo root / tools
 				var tools3ds2gbxml = Path.Combine(_paths.RepoRoot, "tools", "3ds2gbxml");
 				if (!Directory.Exists(tools3ds2gbxml))
 				{
@@ -482,7 +132,6 @@ namespace GbxSolidTool
 					return;
 				}
 
-				// Cherche tous les .3ds
 				var candidates = Directory.GetFiles(tools3ds2gbxml, "*.3ds", SearchOption.AllDirectories);
 				if (candidates.Length == 0)
 				{
@@ -491,7 +140,6 @@ namespace GbxSolidTool
 					return;
 				}
 
-				// Score: on préfère "Template.3ds", puis ceux contenant "template" ou "basic"
 				string PickBest(string[] files)
 				{
 					int Score(string p)
@@ -505,7 +153,6 @@ namespace GbxSolidTool
 						if (full.Contains("basic")) s += 150;
 						if (full.Contains("model")) s += 50;
 
-						// plus près de la racine = un peu mieux
 						var depth = p.Count(c => c == Path.DirectorySeparatorChar || c == Path.AltDirectorySeparatorChar);
 						s -= depth;
 
@@ -526,6 +173,7 @@ namespace GbxSolidTool
 				Status("Load template failed (see logs).");
 			}
 		}
+
 		private void Open_Click(object sender, RoutedEventArgs e)
 		{
 			var dlg = new OpenFileDialog
@@ -543,38 +191,14 @@ namespace GbxSolidTool
 
 		private void Clear_Click(object sender, RoutedEventArgs e)
 		{
-			RemoveCurrentModel();
+			_viewport.Clear();
+			UpdateOverlay();
 			Status("Cleared.");
 		}
-		private void UpdateOverlay()
-		{
-			// overlay visible uniquement si aucun modèle
-			DropOverlay.Visibility = (_modelVisual == null) ? Visibility.Visible : Visibility.Collapsed;
-		}
+
 		private void ToggleLogs_Click(object sender, RoutedEventArgs e)
 		{
 			SetLogsVisible(!_logsVisible);
-		}
-
-		private void SetLogsVisible(bool visible)
-		{
-			_logsVisible = visible;
-
-			if (visible)
-			{
-				// restaure largeur précédente (ou 380 par défaut)
-				LogsColumn.Width = (_lastLogsWidth.Value < 1) ? new GridLength(380) : _lastLogsWidth;
-				LogsColumn.MinWidth = 220;
-			}
-			else
-			{
-				// mémorise largeur actuelle, puis cache
-				_lastLogsWidth = LogsColumn.Width;
-				LogsColumn.MinWidth = 0;
-				LogsColumn.Width = new GridLength(0);
-			}
-			ToggleLogsButton.Content = visible ? "Hide Logs" : "Show Logs";
-
 		}
 
 		private void Viewport_DragOver(object sender, DragEventArgs e)
@@ -584,14 +208,11 @@ namespace GbxSolidTool
 			if (e.Data.GetDataPresent(DataFormats.FileDrop))
 			{
 				var files = (string[])e.Data.GetData(DataFormats.FileDrop);
-				if (files?.Length > 0 && File.Exists(files[0]))
-					e.Effects = DragDropEffects.Copy;
 				if (files?.Length > 0 && File.Exists(files[0]) &&
 					string.Equals(Path.GetExtension(files[0]), ".3ds", StringComparison.OrdinalIgnoreCase))
 				{
 					e.Effects = DragDropEffects.Copy;
 				}
-
 			}
 
 			e.Handled = true;
@@ -615,26 +236,25 @@ namespace GbxSolidTool
 
 			if (File.Exists(path))
 				LoadModel(path);
-
-
 		}
 
 		private void Wireframe_Checked(object sender, RoutedEventArgs e)
 		{
 			_wireframeEnabled = true;
-			UpdateWireframe(true);
+			_viewport.UpdateWireframe(true);
+			Status("Wireframe ON");
 		}
 
 		private void Wireframe_Unchecked(object sender, RoutedEventArgs e)
 		{
 			_wireframeEnabled = false;
-			UpdateWireframe(false);
+			_viewport.UpdateWireframe(false);
+			Status("Wireframe OFF");
 		}
 
 		private void ColorCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
 		{
 			var selected = (e.AddedItems.Count > 0) ? e.AddedItems[0]?.ToString() : null;
-			// ComboBoxItem.ToString() => "System.Windows.Controls.ComboBoxItem: LightGray"
 			var name = selected?.Split(':').LastOrDefault()?.Trim();
 
 			_overrideColor = name switch
@@ -647,8 +267,26 @@ namespace GbxSolidTool
 				_ => Colors.LightGray
 			};
 
-			ApplyOverrideMaterial();
+			_viewport.ApplyOverrideColor(_overrideColor);
+			Status($"Color: {_overrideColor}");
 		}
+
+		private void OpenModelFolder_Click(object sender, RoutedEventArgs e)
+		{
+			if (string.IsNullOrWhiteSpace(_currentModelPath) || !File.Exists(_currentModelPath))
+			{
+				Log("No model loaded.");
+				return;
+			}
+
+			Process.Start(new ProcessStartInfo
+			{
+				FileName = "explorer.exe",
+				Arguments = $"/select,\"{_currentModelPath}\"",
+				UseShellExecute = true
+			});
+		}
+
 		private async void ConvertXml_Click(object sender, RoutedEventArgs e)
 		{
 			if (_currentModelPath == null)
@@ -664,10 +302,9 @@ namespace GbxSolidTool
 				return;
 			}
 
-			// Prépare work\<Model>\{input,xml,build} et copie le .3ds dans input\
-			var work3ds = PrepareWorkDirForModel(_currentModelPath);
+			var work3ds = _work.PrepareWorkDirForModel(_currentModelPath, out var projectDir);
+			_currentWorkDir = projectDir;
 
-			// Flags depuis UI
 			var flags = new List<string>();
 			if (Cb3dsVisual.IsChecked == true) flags.Add("-v");
 			if (Cb3dsSurface.IsChecked == true) flags.Add("-s");
@@ -698,21 +335,18 @@ namespace GbxSolidTool
 				return;
 			}
 
-			// Collect et afficher les fichiers créés
-			CollectXmlOutputs(_currentWorkDir!);
+			_work.CollectXmlOutputs(_currentWorkDir!);
 
 			var xmlFolder = Path.Combine(_currentWorkDir!, "xml");
-			var xmlFiles = SafeListFiles(xmlFolder, "*.xml");
+			var xmlFiles = DirectoryUtil.SafeListFiles(xmlFolder, "*.xml");
 
 			LogOk($"3ds2gbxml OK (exit {code})");
 			LogOk($"XML folder: {xmlFolder}");
 			LogOk($"XML created: {xmlFiles.Count} file(s)");
-
 			foreach (var f in xmlFiles.OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
 				LogOk($"- {Path.GetFileName(f)}");
 
 			Status($"XML OK: {xmlFolder}");
-
 		}
 
 		private async void CompileGbx_Click(object sender, RoutedEventArgs e)
@@ -744,16 +378,13 @@ namespace GbxSolidTool
 				Log("=== GBXC (template workflow) ===");
 				Log($"WorkDir: {_currentWorkDir}");
 
-				// 1) Prepare template folder (copy Basic Model CONTENT into work/.../template/)
 				Status("Preparing template...");
-				var templateDir = PrepareTemplateForGbxc();
+				var templateDir = _template.PrepareTemplateForGbxc(_currentWorkDir);
 				Log($"TemplateDir: {templateDir}");
 
-				// 2) Inject generated XML into template
 				Status("Injecting XML...");
-				InjectXmlIntoTemplate(templateDir);
+				_work.InjectXmlIntoTemplate(_currentWorkDir, templateDir);
 
-				// 3) Solid XML path
 				var solidXml = Path.Combine(templateDir, "Template.Solid.xml");
 				Log($"SolidXml: {solidXml}");
 				if (!File.Exists(solidXml))
@@ -763,12 +394,10 @@ namespace GbxSolidTool
 					return;
 				}
 
-				// 4) Output
 				var buildDir = Path.Combine(_currentWorkDir, "build");
 				Directory.CreateDirectory(buildDir);
 				var outGbx = Path.Combine(buildDir, $"{modelName}.Solid.gbx");
 
-				// 5) Run GBXC
 				var args = $"\"{_paths.GbxcMain}\" -v -o \"{outGbx}\" \"{solidXml}\"";
 
 				Log($"PY : {_paths.PythonExe}");
@@ -793,7 +422,6 @@ namespace GbxSolidTool
 					return;
 				}
 
-				// OK -> on affiche le fichier créé
 				if (File.Exists(outGbx))
 				{
 					var fi = new FileInfo(outGbx);
@@ -804,12 +432,10 @@ namespace GbxSolidTool
 				}
 				else
 				{
-					// Cas rare: exit 0 mais pas de fichier (on veut que ça se voit)
 					LogErr("GBXC reported success but output file is missing!");
 					LogErr($"Expected: {outGbx}");
 					Status("GBX missing (see logs).");
 				}
-
 			}
 			catch (Exception ex)
 			{
@@ -819,300 +445,7 @@ namespace GbxSolidTool
 			}
 		}
 
-
-		private void CollectXmlOutputs(string workDir)
-		{
-			var xmlTarget = Path.Combine(workDir, "xml");
-			Directory.CreateDirectory(xmlTarget);
-
-			bool IsInsideXmlFolder(string path)
-			{
-				var rel = Path.GetRelativePath(workDir, path);
-				var first = rel.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-							   .FirstOrDefault();
-				return string.Equals(first, "xml", StringComparison.OrdinalIgnoreCase);
-			}
-
-			// On prend tous les XML sous workDir, sauf ceux déjà dans workDir\xml\
-			var xmlFiles = Directory.GetFiles(workDir, "*.xml", SearchOption.AllDirectories)
-									.Where(p => !IsInsideXmlFolder(p))
-									.ToList();
-
-			int moved = 0;
-
-			foreach (var src in xmlFiles)
-			{
-				var dst = Path.Combine(xmlTarget, Path.GetFileName(src));
-
-				try
-				{
-					// Si destination existe déjà, on l’écrase
-					if (File.Exists(dst))
-						File.Delete(dst);
-
-					// Move (pas Copy) => plus de doublon
-					File.Move(src, dst);
-					moved++;
-				}
-				catch (Exception ex)
-				{
-					// fallback: si move échoue (verrou, etc.), on copie puis on essaie de supprimer
-					Log($"WARN: move failed for {src} -> {dst} ({ex.Message}), trying copy+delete");
-					File.Copy(src, dst, overwrite: true);
-					try { File.Delete(src); } catch { /* ignore */ }
-					moved++;
-				}
-			}
-
-			// Nettoyage: supprime dossiers vides (optionnel)
-			TryDeleteEmptyFolders(workDir, xmlTarget);
-
-			Log($"Collected XML: moved {moved} file(s) into: {xmlTarget}");
-		}
-		private static List<string> Extract3dsMaterialNames(string path)
-		{
-			var bytes = File.ReadAllBytes(path);
-			var names = new List<string>();
-
-			ushort U16(int o) => (ushort)(bytes[o] | (bytes[o + 1] << 8));
-			uint U32(int o) => (uint)(bytes[o] | (bytes[o + 1] << 8) | (bytes[o + 2] << 16) | (bytes[o + 3] << 24));
-
-			string ReadZString(int start, int end)
-			{
-				int z = start;
-				while (z < end && bytes[z] != 0) z++;
-				return Encoding.ASCII.GetString(bytes, start, Math.Max(0, z - start));
-			}
-
-			void Walk(int start, int end)
-			{
-				int o = start;
-				while (o + 6 <= end)
-				{
-					ushort cid = U16(o);
-					uint len = U32(o + 2);
-					if (len < 6 || o + len > end) break;
-
-					int content = o + 6;
-					int chunkEnd = o + (int)len;
-
-					if (cid == 0xA000) // material name
-					{
-						var n = ReadZString(content, chunkEnd);
-						if (!string.IsNullOrWhiteSpace(n))
-							names.Add(n);
-					}
-
-					// containers
-					if (cid == 0x4D4D || cid == 0x3D3D || cid == 0xAFFF || cid == 0x4100)
-					{
-						Walk(content, chunkEnd);
-					}
-					else if (cid == 0x4000) // object block (name + subchunks)
-					{
-						int z = content;
-						while (z < chunkEnd && bytes[z] != 0) z++;
-						if (z + 1 < chunkEnd)
-							Walk(z + 1, chunkEnd);
-					}
-
-					o += (int)len;
-				}
-			}
-
-			Walk(0, bytes.Length);
-
-			return names
-				.Where(s => !string.IsNullOrWhiteSpace(s))
-				.Distinct(StringComparer.OrdinalIgnoreCase)
-				.ToList();
-		}
-
-		private void TryDeleteEmptyFolders(string root, string keepFolder)
-		{
-			try
-			{
-				foreach (var dir in Directory.GetDirectories(root, "*", SearchOption.AllDirectories)
-											 .OrderByDescending(d => d.Length))
-				{
-					if (string.Equals(Path.GetFullPath(dir).TrimEnd('\\'),
-									  Path.GetFullPath(keepFolder).TrimEnd('\\'),
-									  StringComparison.OrdinalIgnoreCase))
-						continue;
-
-					// ne supprime pas build/input/xml
-					var name = new DirectoryInfo(dir).Name;
-					if (name.Equals("input", StringComparison.OrdinalIgnoreCase) ||
-						name.Equals("xml", StringComparison.OrdinalIgnoreCase) ||
-						name.Equals("build", StringComparison.OrdinalIgnoreCase))
-						continue;
-
-					if (!Directory.EnumerateFileSystemEntries(dir).Any())
-						Directory.Delete(dir, false);
-				}
-			}
-			catch
-			{
-				// nettoyage best-effort, on ne bloque pas
-			}
-		}
-
-		private void UpdateWireframe(bool enabled)
-		{
-			try
-			{
-				if (!enabled)
-				{
-					if (_wireframe != null)
-					{
-						View3D.Children.Remove(_wireframe);
-						_wireframe = null;
-						Status("Wireframe OFF");
-					}
-					return;
-				}
-
-				if (_modelVisual?.Content == null)
-				{
-					Status("Wireframe: no model loaded.");
-					return;
-				}
-
-				var points = WireframeBuilder.BuildLinePoints(_modelVisual.Content);
-
-				if (_wireframe != null)
-					View3D.Children.Remove(_wireframe);
-
-				_wireframe = new LinesVisual3D
-				{
-					Thickness = 1.0,
-					Color = Colors.White,
-					Points = new Point3DCollection(points)
-				};
-
-				View3D.Children.Add(_wireframe);
-				Status("Wireframe ON");
-			}
-			catch (Exception ex)
-			{
-				Log("Wireframe ERROR: " + ex);
-				Status("Wireframe failed (see logs).");
-			}
-		}
-
-		private void OpenModelFolder_Click(object sender, RoutedEventArgs e)
-		{
-			if (string.IsNullOrWhiteSpace(_currentModelPath) || !File.Exists(_currentModelPath))
-			{
-				Log("No model loaded.");
-				return;
-			}
-
-			Process.Start(new ProcessStartInfo
-			{
-				FileName = "explorer.exe",
-				Arguments = $"/select,\"{_currentModelPath}\"",
-				UseShellExecute = true
-			});
-		}
-
-		// Variante "unique" (si tu veux un dossier différent à chaque run)
-		private string PrepareWorkDirForModel(string source3dsPath)
-		{
-			var name = Path.GetFileNameWithoutExtension(source3dsPath);
-			var workRoot = Path.Combine(_paths.RepoRoot, "work");
-			Directory.CreateDirectory(workRoot);
-
-			var stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-			var projectDir = Path.Combine(workRoot, $"{name}_{stamp}");
-
-			var inputDir = Path.Combine(projectDir, "input");
-			var xmlDir   = Path.Combine(projectDir, "xml");
-			var buildDir = Path.Combine(projectDir, "build");
-
-			Directory.CreateDirectory(inputDir);
-			Directory.CreateDirectory(xmlDir);
-			Directory.CreateDirectory(buildDir);
-
-			var dst3ds = Path.Combine(inputDir, Path.GetFileName(source3dsPath));
-			File.Copy(source3dsPath, dst3ds, overwrite: true);
-
-			_currentWorkDir = projectDir;
-			return dst3ds;
-		}
-		private static List<string> Extract3dsObjectMaterials(string path)
-		{
-			var bytes = File.ReadAllBytes(path);
-			var result = new List<string>();
-
-			ushort U16(int o) => (ushort)(bytes[o] | (bytes[o + 1] << 8));
-			uint U32(int o) => (uint)(bytes[o] | (bytes[o + 1] << 8) | (bytes[o + 2] << 16) | (bytes[o + 3] << 24));
-
-			string ReadZString(ref int o)
-			{
-				int start = o;
-				while (bytes[o] != 0) o++;
-				var s = Encoding.ASCII.GetString(bytes, start, o - start);
-				o++; // skip zero
-				return s;
-			}
-
-			void Walk(int start, int end)
-			{
-				int o = start;
-				while (o + 6 <= end)
-				{
-					ushort cid = U16(o);
-					int len = (int)U32(o + 2);
-					if (len < 6) break;
-
-					int content = o + 6;
-					int chunkEnd = o + len;
-
-					if (cid == 0x4000) // Object block
-					{
-						int p = content;
-						ReadZString(ref p); // object name (ignored)
-
-						string? materialForObject = null;
-
-						void WalkObject(int os, int oe)
-						{
-							int x = os;
-							while (x + 6 <= oe)
-							{
-								ushort id = U16(x);
-								int l = (int)U32(x + 2);
-								int c = x + 6;
-
-								if (id == 0x4130) // Face material
-								{
-									int t = c;
-									string mat = ReadZString(ref t);
-									materialForObject ??= mat;
-								}
-
-								x += l;
-							}
-						}
-
-						WalkObject(p, chunkEnd);
-
-						result.Add(materialForObject ?? "UNKNOWN");
-					}
-					else if (cid == 0x4D4D || cid == 0x3D3D)
-					{
-						Walk(content, chunkEnd);
-					}
-
-					o += len;
-				}
-			}
-
-			Walk(0, bytes.Length);
-			return result;
-		}
-
+		// ---------------- Model loading ----------------
 
 		private void LoadModel(string path)
 		{
@@ -1128,239 +461,39 @@ namespace GbxSolidTool
 				ClearLogs();
 				Log($"Load: {path}");
 
-				// Matériaux déclarés dans le .3ds
-				var materialNames = Extract3dsMaterialNames(path);
-				Log($"3DS materials: {materialNames.Count}");
+				// Parse 3DS
+				var declaredMaterials = ThreeDsParser.ExtractMaterialNamesA000(path);
+				var faceGroups = ThreeDsParser.ExtractFaceMaterialGroups4130(path);
 
-				// Matériaux déclarés dans le .3ds (0xA000)
-				var declaredMaterials = Extract3dsMaterialNames(path);
-
-				// Groupes faces->matériau (0x4130)
-				var faceGroups = Extract3dsFaceMaterialGroups(path);
-
-				// Logs: liste matériaux + faces (sans lignes group:)
-				LogDetectedMaterialsWithFaces(declaredMaterials, faceGroups);
-
-
-
-				RemoveCurrentModel();
+				MaterialLogging.LogDetectedMaterialsWithFaces(
+					s => Log(s),
+					(c, s) => Log(c, s),
+					declaredMaterials,
+					faceGroups
+				);
 
 				// Import Helix
 				var model = _importer.Load(path);
 				_currentModelPath = path;
 
-				// Collect des GeometryModel3D (dans l'ordre de la scène)
+				// Apply materials by 0x4130 mapping
 				var geoms = new List<GeometryModel3D>();
-				CollectGeometryModels(model, geoms);
+				ViewportService.CollectGeometryModels(model, geoms);
+				ViewportService.ApplyFaceGroupColors(geoms, faceGroups, _overrideColor, (c, s) => Log(c, s));
 
-				// Warning si mismatch (utile pour debug)
-				if (geoms.Count != faceGroups.Count)
-				{
-					Log(Colors.Orange, $"WARN: Helix geoms={geoms.Count} vs 3DS groups={faceGroups.Count} (mapping par ordre)");
-				}
-
-				// Appliquer une couleur par "groupe matériau"
-				int n = Math.Min(geoms.Count, faceGroups.Count);
-				for (int i = 0; i < n; i++)
-				{
-					var matName = faceGroups[i].MaterialName;
-
-					var color = KnownMaterials.Contains(matName)
-						? GetMaterialColor(matName)
-						: Colors.Red;
-
-					var mat = MaterialHelper.CreateMaterial(color);
-					geoms[i].Material = mat;
-					geoms[i].BackMaterial = mat;
-				}
-
-				// Si Helix a plus d'objets que de groupes, on met l'override sur le reste
-				if (geoms.Count > n)
-				{
-					var fallback = MaterialHelper.CreateMaterial(_overrideColor);
-					for (int i = n; i < geoms.Count; i++)
-					{
-						geoms[i].Material = fallback;
-						geoms[i].BackMaterial = fallback;
-					}
-				}
-
-				_modelVisual = new ModelVisual3D { Content = model };
-				View3D.Children.Add(_modelVisual);
-
-				View3D.ZoomExtents();
-				Status($"Loaded: {Path.GetFileName(path)} ({path})");
+				// Display
+				_viewport.ShowModel(model);
 				UpdateOverlay();
 
-				UpdateWireframe(_wireframeEnabled);
+				_viewport.UpdateWireframe(_wireframeEnabled);
+
+				Status($"Loaded: {Path.GetFileName(path)} ({path})");
 			}
 			catch (Exception ex)
 			{
 				Status("Load failed (see logs).");
 				Log("ERROR: " + ex);
 				MessageBox.Show(ex.ToString(), "Load failed", MessageBoxButton.OK, MessageBoxImage.Error);
-			}
-		}
-
-
-		private void RemoveCurrentModel()
-		{
-			if (_wireframe != null)
-			{
-				View3D.Children.Remove(_wireframe);
-				_wireframe = null;
-			}
-
-			if (_modelVisual != null)
-			{
-				View3D.Children.Remove(_modelVisual);
-				_modelVisual = null;
-			}
-			UpdateOverlay();
-		}
-
-		private bool IsWireframeChecked() => _wireframeEnabled;
-
-		
-
-		private void ApplyOverrideMaterial()
-		{
-			if (_modelVisual?.Content == null)
-				return;
-
-			try
-			{
-				OverrideMaterialsRecursive(_modelVisual.Content, MaterialHelper.CreateMaterial(_overrideColor));
-				Status($"Color: {_overrideColor}");
-			}
-			catch (Exception ex)
-			{
-				Log("Color override ERROR: " + ex);
-			}
-		}
-
-		private static void OverrideMaterialsRecursive(Model3D model, Material mat)
-		{
-			if (model is Model3DGroup g)
-			{
-				foreach (var child in g.Children)
-					OverrideMaterialsRecursive(child, mat);
-				return;
-			}
-
-			if (model is GeometryModel3D gm)
-			{
-				gm.Material = mat;
-				gm.BackMaterial = mat;
-			}
-		}
-
-		private void Status(string text) => StatusText.Text = text;
-		private Paragraph EnsureLogParagraph()
-		{
-			if (LogBox.Document == null)
-				LogBox.Document = new FlowDocument();
-
-			var p = LogBox.Document.Blocks.LastBlock as Paragraph;
-			if (p == null)
-			{
-				p = new Paragraph { Margin = new Thickness(0) };
-				LogBox.Document.Blocks.Add(p);
-			}
-			return p;
-		}
-		private void Log(string text)
-		{
-			var p = EnsureLogParagraph();
-			p.Inlines.Add(new Run(text));
-			p.Inlines.Add(new LineBreak());
-			LogBox.ScrollToEnd();
-		}
-
-		private void Log(Color color, string text)
-		{
-			var p = EnsureLogParagraph();
-			p.Inlines.Add(new Run(text) { Foreground = new SolidColorBrush(color) });
-			p.Inlines.Add(new LineBreak());
-			LogBox.ScrollToEnd();
-		}
-
-		/// <summary>
-		/// Minimal wireframe builder: extracts triangle edges from MeshGeometry3D
-		/// and returns a list of points pairs (A,B,A,B...) for LinesVisual3D.
-		/// </summary>
-		private static class WireframeBuilder
-		{
-			public static List<Point3D> BuildLinePoints(Model3D model)
-			{
-				var lines = new List<Point3D>();
-				AddModelLines(model, Transform3D.Identity, lines);
-				return lines;
-			}
-
-			private static void AddModelLines(Model3D model, Transform3D parent, List<Point3D> outLines)
-			{
-				var current = Combine(parent, model.Transform);
-
-				if (model is Model3DGroup g)
-				{
-					foreach (var child in g.Children)
-						AddModelLines(child, current, outLines);
-					return;
-				}
-
-				if (model is GeometryModel3D gm && gm.Geometry is MeshGeometry3D mesh)
-				{
-					AddMeshEdges(mesh, current, outLines);
-				}
-			}
-
-			private static void AddMeshEdges(MeshGeometry3D mesh, Transform3D transform, List<Point3D> outLines)
-			{
-				if (mesh.Positions == null || mesh.TriangleIndices == null || mesh.TriangleIndices.Count < 3)
-					return;
-
-				// Deduplicate edges: store (minIndex,maxIndex)
-				var edges = new HashSet<(int a, int b)>();
-
-				var idx = mesh.TriangleIndices;
-				for (int i = 0; i + 2 < idx.Count; i += 3)
-				{
-					AddEdge(idx[i], idx[i + 1]);
-					AddEdge(idx[i + 1], idx[i + 2]);
-					AddEdge(idx[i + 2], idx[i]);
-				}
-
-				void AddEdge(int i0, int i1)
-				{
-					if (i0 == i1) return;
-					var a = Math.Min(i0, i1);
-					var b = Math.Max(i0, i1);
-					edges.Add((a, b));
-				}
-
-				foreach (var (a, b) in edges)
-				{
-					if (a < 0 || b < 0 || a >= mesh.Positions.Count || b >= mesh.Positions.Count)
-						continue;
-
-					var p0 = transform.Transform(mesh.Positions[a]);
-					var p1 = transform.Transform(mesh.Positions[b]);
-
-					outLines.Add(p0);
-					outLines.Add(p1);
-				}
-			}
-
-			private static Transform3D Combine(Transform3D a, Transform3D b)
-			{
-				if (a == null || a == Transform3D.Identity) return b ?? Transform3D.Identity;
-				if (b == null || b == Transform3D.Identity) return a;
-
-				var tg = new Transform3DGroup();
-				tg.Children.Add(a);
-				tg.Children.Add(b);
-				return tg;
 			}
 		}
 	}
