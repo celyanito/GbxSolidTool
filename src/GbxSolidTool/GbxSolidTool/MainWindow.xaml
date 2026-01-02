@@ -6,8 +6,7 @@
         xmlns:helix="http://helix-toolkit.org/wpf"
         mc:Ignorable="d"
         Title="GbxSolidTool" Width="1200" Height="750"
-        Background="#111"
-        >
+        Background="#111">
     <DockPanel LastChildFill="True">
 
         <!-- Top bar -->
@@ -17,49 +16,32 @@
                 <!-- Left buttons -->
                 <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
                     <Button Padding="12,6" Margin="0,0,8,0"
-                    Content="Load Template" Click="LoadTemplate_Click"/>
+                            Content="Load Template" Click="LoadTemplate_Click"/>
 
                     <Button Padding="12,6" Margin="0,0,8,0"
-                    Content="Open (.3ds)" Click="Open_Click"/>
+                            Content="Open (.3ds)" Click="Open_Click"/>
 
                     <Button Padding="12,6" Margin="0,0,8,0"
-                    Content="Clear" Click="Clear_Click"/>
+                            Content="Clear" Click="Clear_Click"/>
 
                     <StackPanel Orientation="Vertical" Margin="0,0,8,0">
                         <Button Padding="12,6"
-            Content="Convert XML" Click="ConvertXml_Click"/>
+                                Content="Convert XML" Click="ConvertXml_Click"/>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,4,0,0">
                             <CheckBox x:Name="Cb3dsVisual" Content="-v" IsChecked="True" Foreground="#ddd" Margin="0,0,8,0"/>
                             <CheckBox x:Name="Cb3dsSurface" Content="-s" IsChecked="True" Foreground="#ddd"/>
                         </StackPanel>
                     </StackPanel>
 
-
                     <Button Padding="12,6" Margin="0,0,8,0"
-                    Content="Compile GBX" Click="CompileGbx_Click"/>
+                            Content="Compile GBX" Click="CompileGbx_Click"/>
 
                     <Button x:Name="ToggleLogsButton" Padding="12,6" Margin="0,0,8,0"
-                    Content="Hide Logs" Click="ToggleLogs_Click"/>
-                </StackPanel>
+                            Content="Hide Logs" Click="ToggleLogs_Click"/>
 
-                <!-- Right controls -->
-                <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
-                    <CheckBox Margin="0,0,12,0" VerticalAlignment="Center"
-                      Content="Wireframe" Foreground="#ddd"
-                      Checked="Wireframe_Checked" Unchecked="Wireframe_Unchecked"/>
-
-                    <TextBlock VerticalAlignment="Center" Foreground="#bbb" Margin="0,0,8,0"
-                       Text="Color:"/>
-
-                    <ComboBox Width="160" SelectedIndex="0"
-                      SelectionChanged="ColorCombo_SelectionChanged">
-                        <ComboBoxItem Content="LightGray"/>
-                        <ComboBoxItem Content="White"/>
-                        <ComboBoxItem Content="Orange"/>
-                        <ComboBoxItem Content="HotPink"/>
-                        <ComboBoxItem Content="Cyan"/>
-                        <ComboBoxItem Content="Lime"/>
-                    </ComboBox>
+                    <!-- NEW: Open model folder -->
+                    <Button Padding="12,6"
+                            Content="Open Folder" Click="OpenModelFolder_Click"/>
                 </StackPanel>
 
             </DockPanel>
@@ -75,49 +57,61 @@
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="6"/>
-                <!-- splitter -->
                 <ColumnDefinition x:Name="LogsColumn" Width="380" MinWidth="220"/>
             </Grid.ColumnDefinitions>
 
-
             <!-- Viewport -->
             <Border Grid.Column="0" Margin="10" CornerRadius="10"
-        Background="#0f0f0f" BorderBrush="#2a2a2a" BorderThickness="1"
-        AllowDrop="True"
-        DragOver="Viewport_DragOver"
-        Drop="Viewport_Drop">
+                    Background="#0f0f0f" BorderBrush="#2a2a2a" BorderThickness="1"
+                    AllowDrop="True"
+                    DragOver="Viewport_DragOver"
+                    Drop="Viewport_Drop">
                 <Grid>
                     <helix:HelixViewport3D x:Name="View3D"
-                              Background="#0f0f0f"
-                              ShowFrameRate="True"
-                              ShowCoordinateSystem="True"
-                              ZoomExtentsWhenLoaded="True"/>
+                                          Background="#0f0f0f"
+                                          ShowFrameRate="True"
+                                          ShowCoordinateSystem="True"
+                                          ZoomExtentsWhenLoaded="True"/>
+
+                    <!-- Wireframe checkbox (top-left inside viewport) -->
+                    <Border HorizontalAlignment="Left"
+                        VerticalAlignment="Top"
+                        Margin="10"
+                        Padding="6,4"
+                        CornerRadius="6"
+                        Background="#AA000000">
+                                        <CheckBox Content="Wireframe"
+                              Foreground="White"
+                              Checked="Wireframe_Checked"
+                              Unchecked="Wireframe_Unchecked"/>
+                    </Border>
+
 
                     <!-- Overlay message when no model -->
                     <Border x:Name="DropOverlay"
-                Background="#66000000"
-                CornerRadius="12"
-                Padding="18"
-                HorizontalAlignment="Center"
-                VerticalAlignment="Center"
-                Visibility="Visible">
+                            Background="#66000000"
+                            CornerRadius="12"
+                            Padding="18"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
+                            Visibility="Visible">
                         <TextBlock Text="Drag &amp; drop a .3ds model here&#x0a;or click Open / Load Template"
-                       Foreground="#f0f0f0"
-                       FontSize="22"
-                       FontWeight="SemiBold"
-                       TextAlignment="Center"/>
+                                   Foreground="#f0f0f0"
+                                   FontSize="22"
+                                   FontWeight="SemiBold"
+                                   TextAlignment="Center"/>
                     </Border>
                 </Grid>
             </Border>
-            <GridSplitter Grid.Column="1"
-              Width="6"
-              HorizontalAlignment="Stretch"
-              VerticalAlignment="Stretch"
-              Background="#1a1a1a"
-              ShowsPreview="True"
-              ResizeBehavior="PreviousAndNext"
-              ResizeDirection="Columns"/>
 
+            <GridSplitter Grid.Column="1"
+                          Width="6"
+                          HorizontalAlignment="Stretch"
+                          VerticalAlignment="Stretch"
+                          Background="#1a1a1a"
+                          ShowsPreview="True"
+                          ResizeBehavior="PreviousAndNext"
+                          ResizeDirection="Columns"/>
 
             <!-- Logs -->
             <Border Grid.Column="2" Margin="10,10,10,10" CornerRadius="10"
@@ -126,13 +120,13 @@
                     <TextBlock DockPanel.Dock="Top" Padding="10,8" Foreground="#ddd"
                                Text="Logs"/>
                     <RichTextBox x:Name="LogBox"
-                                IsReadOnly="True"
-                                Background="#101010"
-                                Foreground="White"
-                                BorderThickness="0"
-                                VerticalScrollBarVisibility="Auto"
-                                FontFamily="Consolas"
-                                FontSize="12"/>
+                                 IsReadOnly="True"
+                                 Background="#101010"
+                                 Foreground="White"
+                                 BorderThickness="0"
+                                 VerticalScrollBarVisibility="Auto"
+                                 FontFamily="Consolas"
+                                 FontSize="12"/>
                 </DockPanel>
             </Border>
         </Grid>

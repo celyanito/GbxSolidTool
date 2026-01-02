@@ -3,6 +3,7 @@ using HelixToolkit.Wpf;
 using Microsoft.Win32;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -850,6 +851,64 @@ namespace GbxSolidTool
 			}
 		}
 
+		private void UpdateWireframe(bool enabled)
+		{
+			try
+			{
+				if (!enabled)
+				{
+					if (_wireframe != null)
+					{
+						View3D.Children.Remove(_wireframe);
+						_wireframe = null;
+						Status("Wireframe OFF");
+					}
+					return;
+				}
+
+				if (_modelVisual?.Content == null)
+				{
+					Status("Wireframe: no model loaded.");
+					return;
+				}
+
+				var points = WireframeBuilder.BuildLinePoints(_modelVisual.Content);
+
+				if (_wireframe != null)
+					View3D.Children.Remove(_wireframe);
+
+				_wireframe = new LinesVisual3D
+				{
+					Thickness = 1.0,
+					Color = Colors.White,
+					Points = new Point3DCollection(points)
+				};
+
+				View3D.Children.Add(_wireframe);
+				Status("Wireframe ON");
+			}
+			catch (Exception ex)
+			{
+				Log("Wireframe ERROR: " + ex);
+				Status("Wireframe failed (see logs).");
+			}
+		}
+
+		private void OpenModelFolder_Click(object sender, RoutedEventArgs e)
+		{
+			if (string.IsNullOrWhiteSpace(_currentModelPath) || !File.Exists(_currentModelPath))
+			{
+				Log("No model loaded.");
+				return;
+			}
+
+			Process.Start(new ProcessStartInfo
+			{
+				FileName = "explorer.exe",
+				Arguments = $"/select,\"{_currentModelPath}\"",
+				UseShellExecute = true
+			});
+		}
 
 		// Variante "unique" (si tu veux un dossier différent à chaque run)
 		private string PrepareWorkDirForModel(string source3dsPath)
@@ -1052,49 +1111,7 @@ namespace GbxSolidTool
 
 		private bool IsWireframeChecked() => _wireframeEnabled;
 
-		private void UpdateWireframe(bool enabled)
-		{
-			try
-			{
-				if (!enabled)
-				{
-					if (_wireframe != null)
-					{
-						View3D.Children.Remove(_wireframe);
-						_wireframe = null;
-						Status("Wireframe OFF");
-					}
-					return;
-				}
-
-				if (_modelVisual?.Content == null)
-				{
-					Status("Wireframe: no model loaded.");
-					return;
-				}
-
-				// Rebuild from model geometry
-				var points = WireframeBuilder.BuildLinePoints(_modelVisual.Content);
-
-				if (_wireframe != null)
-					View3D.Children.Remove(_wireframe);
-
-				_wireframe = new LinesVisual3D
-				{
-					Thickness = 1.0,
-					Color = Colors.White,
-					Points = new Point3DCollection(points)
-				};
-
-				View3D.Children.Add(_wireframe);
-				Status("Wireframe ON");
-			}
-			catch (Exception ex)
-			{
-				Log("Wireframe ERROR: " + ex);
-				Status("Wireframe failed (see logs).");
-			}
-		}
+		
 
 		private void ApplyOverrideMaterial()
 		{
