@@ -28,6 +28,7 @@ namespace GbxSolidTool
 
 		private string? _currentModelPath;
 		private string? _currentWorkDir;
+		private string? _currentTemplateDir;
 
 		private bool _logsVisible = true;
 		private GridLength _lastLogsWidth = new GridLength(380);
@@ -334,7 +335,7 @@ namespace GbxSolidTool
 				Status($"XML failed (exit {code})");
 				return;
 			}
-
+			// Collect outputs -> workDir\xml
 			_work.CollectXmlOutputs(_currentWorkDir!);
 
 			var xmlFolder = Path.Combine(_currentWorkDir!, "xml");
@@ -346,7 +347,37 @@ namespace GbxSolidTool
 			foreach (var f in xmlFiles.OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
 				LogOk($"- {Path.GetFileName(f)}");
 
-			Status($"XML OK: {xmlFolder}");
+			// ---- NEW: prepare template + inject xml right now ----
+			try
+			{
+				Status("Preparing template + injecting XML...");
+
+				_currentTemplateDir = _template.PrepareTemplateForGbxc(_currentWorkDir!);
+				_work.InjectXmlIntoTemplate(_currentWorkDir!, _currentTemplateDir);
+
+				LogOk($"Template prepared: {_currentTemplateDir}");
+
+				// Quick check: Template.Solid.xml exists
+				var solidXml = Path.Combine(_currentTemplateDir, "Template.Solid.xml");
+				if (File.Exists(solidXml))
+					LogOk("Template.Solid.xml OK");
+				else
+					LogWarn("Template.Solid.xml missing in template folder!");
+
+				// Log what got copied into template (xml)
+				var copied = DirectoryUtil.SafeListFiles(_currentTemplateDir, "*.xml");
+				LogOk($"Template XML now: {copied.Count} file(s)");
+				foreach (var f in copied.OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+					LogOk($"- {Path.GetFileName(f)}");
+
+				Status($"XML OK + Template ready: {_currentTemplateDir}");
+			}
+			catch (Exception ex)
+			{
+				LogWarn("Template prep/inject failed (you can still compile manually): " + ex.Message);
+				Status("XML OK, but template prep failed (see logs).");
+			}
+
 		}
 
 		private async void CompileGbx_Click(object sender, RoutedEventArgs e)
@@ -378,12 +409,23 @@ namespace GbxSolidTool
 				Log("=== GBXC (template workflow) ===");
 				Log($"WorkDir: {_currentWorkDir}");
 
-				Status("Preparing template...");
-				var templateDir = _template.PrepareTemplateForGbxc(_currentWorkDir);
-				Log($"TemplateDir: {templateDir}");
+				// Reuse already prepared template if available, otherwise prepare now
+				var templateDir = _currentTemplateDir;
 
-				Status("Injecting XML...");
-				_work.InjectXmlIntoTemplate(_currentWorkDir, templateDir);
+				if (string.IsNullOrWhiteSpace(templateDir) || !Directory.Exists(templateDir))
+				{
+					Status("Preparing template...");
+					templateDir = _template.PrepareTemplateForGbxc(_currentWorkDir);
+					_currentTemplateDir = templateDir;
+					Log($"TemplateDir: {templateDir}");
+
+					Status("Injecting XML...");
+					_work.InjectXmlIntoTemplate(_currentWorkDir, templateDir);
+				}
+				else
+				{
+					LogOk($"Reusing template: {templateDir}");
+				}
 
 				var solidXml = Path.Combine(templateDir, "Template.Solid.xml");
 				Log($"SolidXml: {solidXml}");
