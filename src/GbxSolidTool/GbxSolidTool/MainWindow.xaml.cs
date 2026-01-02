@@ -118,6 +118,23 @@ namespace GbxSolidTool
 			if (LogBox.Document != null)
 				LogBox.Document.Blocks.Clear();
 		}
+		private void LogOk(string text) => Log(Colors.LimeGreen, "✓ " + text);
+		private void LogErr(string text) => Log(Colors.Red, "✗ " + text);
+		private void LogWarn(string text) => Log(Colors.Orange, "! " + text);
+
+		private static List<string> SafeListFiles(string folder, string pattern)
+		{
+			try
+			{
+				if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
+					return new List<string>();
+				return Directory.GetFiles(folder, pattern, SearchOption.TopDirectoryOnly).ToList();
+			}
+			catch
+			{
+				return new List<string>();
+			}
+		}
 
 		private sealed class FoundMat
 		{
@@ -669,12 +686,26 @@ namespace GbxSolidTool
 
 			if (code != 0)
 			{
+				LogErr($"3ds2gbxml FAILED (exit {code})");
 				Status($"XML failed (exit {code})");
 				return;
 			}
 
+			// Collect et afficher les fichiers créés
 			CollectXmlOutputs(_currentWorkDir!);
-			Status($"XML OK: {_currentWorkDir}\\xml");
+
+			var xmlFolder = Path.Combine(_currentWorkDir!, "xml");
+			var xmlFiles = SafeListFiles(xmlFolder, "*.xml");
+
+			LogOk($"3ds2gbxml OK (exit {code})");
+			LogOk($"XML folder: {xmlFolder}");
+			LogOk($"XML created: {xmlFiles.Count} file(s)");
+
+			foreach (var f in xmlFiles.OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+				LogOk($"- {Path.GetFileName(f)}");
+
+			Status($"XML OK: {xmlFolder}");
+
 		}
 
 		private async void CompileGbx_Click(object sender, RoutedEventArgs e)
@@ -750,11 +781,28 @@ namespace GbxSolidTool
 
 				if (code != 0)
 				{
+					LogErr($"GBXC FAILED (exit {code})");
 					Status($"GBX failed (exit {code})");
 					return;
 				}
 
-				Status($"GBX OK: {outGbx}");
+				// OK -> on affiche le fichier créé
+				if (File.Exists(outGbx))
+				{
+					var fi = new FileInfo(outGbx);
+					LogOk($"GBXC OK (exit {code})");
+					LogOk($"GBX created: {fi.Name} ({fi.Length} bytes)");
+					LogOk($"GBX path: {outGbx}");
+					Status($"GBX OK: {outGbx}");
+				}
+				else
+				{
+					// Cas rare: exit 0 mais pas de fichier (on veut que ça se voit)
+					LogErr("GBXC reported success but output file is missing!");
+					LogErr($"Expected: {outGbx}");
+					Status("GBX missing (see logs).");
+				}
+
 			}
 			catch (Exception ex)
 			{
