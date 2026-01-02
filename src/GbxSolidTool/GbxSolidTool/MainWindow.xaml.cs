@@ -54,9 +54,16 @@ namespace GbxSolidTool
 			Log($"3DS materials (declared 0xA000): {declaredMaterials.Count}");
 			Log($"3DS materials (used 0x4130): {usedMaterials.Count}");
 
-			// Tu voulais “mets le en rouge” => warning rouge si A000 absent mais 4130 présent
-			if (declaredMaterials.Count == 0 && usedMaterials.Count > 0)
-				Log(Colors.Red, "⚠ WARNING: no material blocks (0xA000) found — using face material groups (0x4130)");
+			// TrackMania rule: A000 blocks must NOT be present.
+			// If A000 is detected, the export is incorrect (should use GreffMASTER addon).
+			if (declaredMaterials.Count > 0)
+			{
+				Log(Colors.Orange,
+					$"⚠ WARNING: {declaredMaterials.Count} material block(s) (0xA000) detected.\n" +
+					"  TrackMania requires NO A000 blocks.\n" +
+					"  Re-export the model using GreffMASTER's Blender addon.");
+			}
+
 
 			Log("Matériaux détectés :");
 
