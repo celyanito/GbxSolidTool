@@ -29,6 +29,7 @@ namespace GbxSolidTool
 		private string? _currentModelPath;
 		private string? _currentWorkDir;
 		private string? _currentTemplateDir;
+		private string? _lastErrLine;
 
 		private bool _logsVisible = true;
 		private GridLength _lastLogsWidth = new GridLength(380);
@@ -36,6 +37,8 @@ namespace GbxSolidTool
 		private readonly ViewportService _viewport;
 		private readonly WorkDirService _work;
 		private readonly TemplateService _template;
+		
+		private int _lastErrCount;
 
 		public MainWindow()
 		{
@@ -50,6 +53,7 @@ namespace GbxSolidTool
 			Log("Ready.");
 			UpdateOverlay();
 		}
+		
 
 		// ---------------- UI helpers ----------------
 
@@ -287,6 +291,81 @@ namespace GbxSolidTool
 				UseShellExecute = true
 			});
 		}
+		private static readonly string[] CanonicalMaterials =
+		{
+			"Concrete",
+			"Pavement",
+			"Grass",
+			"Ice",
+			"Metal",
+			"Sand",
+			"Dirt",
+			"Turbo",
+			"DirtRoad",
+			"Rubber",
+			"SlidingRubber",
+			"Test",
+			"Rock",
+			"Water",
+			"Wood",
+			"Danger",
+			"Asphalt",
+			"WetDirtRoad",
+			"WetAsphalt",
+			"WetPavement",
+			"WetGrass",
+			"Snow",
+			"ResonantMetal",
+			"GolfBall",
+			"GolfWall",
+			"GolfGround",
+			"Turbo2",
+			"Bumper",
+			"NotCollidable",
+			"FreeWheeling",
+			"TurboRoulette",
+		};
+		private static string? FindCanonicalMaterial(string name)
+		{
+			if (string.IsNullOrWhiteSpace(name)) return null;
+
+			// super important: trim (souvent des espaces invisibles)
+			name = name.Trim();
+
+			return CanonicalMaterials.FirstOrDefault(m =>
+				string.Equals(m, name, StringComparison.OrdinalIgnoreCase));
+		}
+
+		private void WarnMaterialCasing(IEnumerable<FaceMatGroup> faceGroups)
+		{
+			var warned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+			foreach (var g in faceGroups)
+			{
+				var originalRaw = g.MaterialName;
+				if (string.IsNullOrWhiteSpace(originalRaw))
+					continue;
+
+				var original = originalRaw.Trim();
+				var canonical = FindCanonicalMaterial(original);
+
+				// Si le matériau est connu (case-insensitive) mais pas la bonne casse exacte
+				if (canonical != null && !original.Equals(canonical, StringComparison.Ordinal))
+				{
+					if (warned.Add(original))
+					{
+						LogWarn($"Material casing mismatch detected: '{originalRaw}' → expected '{canonical}'. " +
+								"3ds2gbxml is case-sensitive; please rename the material in your 3D editor.");
+					}
+				}
+			}
+		}
+
+		private static string ToTitleCaseInvariant(string s)
+		{
+			if (string.IsNullOrWhiteSpace(s)) return s;
+			return char.ToUpperInvariant(s[0]) + s.Substring(1).ToLowerInvariant();
+		}
 
 		private async void ConvertXml_Click(object sender, RoutedEventArgs e)
 		{
@@ -303,6 +382,9 @@ namespace GbxSolidTool
 				return;
 			}
 
+			// --------------------------------------------------
+			// Prepare work directory
+			// --------------------------------------------------
 			var work3ds = _work.PrepareWorkDirForModel(_currentModelPath, out var projectDir);
 			_currentWorkDir = projectDir;
 
@@ -319,6 +401,9 @@ namespace GbxSolidTool
 			Log($"CMD : {_paths.PythonExe} {args}");
 			Status("Converting to XML...");
 
+			// --------------------------------------------------
+			// Run 3ds2gbxml
+			// --------------------------------------------------
 			int code = await _runner.RunAsync(
 				_paths.PythonExe,
 				args,
@@ -335,49 +420,89 @@ namespace GbxSolidTool
 				Status($"XML failed (exit {code})");
 				return;
 			}
-			// Collect outputs -> workDir\xml
-			_work.CollectXmlOutputs(_currentWorkDir!);
 
-			var xmlFolder = Path.Combine(_currentWorkDir!, "xml");
+			// --------------------------------------------------
+			// Collect XML outputs
+			// --------------------------------------------------
+			_work.CollectXmlOutputs(_currentWorkDir);
+
+			var xmlFolder = Path.Combine(_currentWorkDir, "xml");
 			var xmlFiles = DirectoryUtil.SafeListFiles(xmlFolder, "*.xml");
 
 			LogOk($"3ds2gbxml OK (exit {code})");
 			LogOk($"XML folder: {xmlFolder}");
 			LogOk($"XML created: {xmlFiles.Count} file(s)");
+
 			foreach (var f in xmlFiles.OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
 				LogOk($"- {Path.GetFileName(f)}");
 
-			// ---- NEW: prepare template + inject xml right now ----
+			// --------------------------------------------------
+			// Prepare template + inject XML
+			// --------------------------------------------------
 			try
 			{
-				Status("Preparing template + injecting XML...");
+				Status("Preparing template...");
 
-				_currentTemplateDir = _template.PrepareTemplateForGbxc(_currentWorkDir!);
-				_work.InjectXmlIntoTemplate(_currentWorkDir!, _currentTemplateDir);
+				_currentTemplateDir = _template.PrepareTemplateForGbxc(_currentWorkDir);
+				_work.InjectXmlIntoTemplate(_currentWorkDir, _currentTemplateDir);
+
+				// Build trees (Root / ModelElements / Parts)
+				var faceGroups = ThreeDsParser.ExtractFaceMaterialGroups4130(_currentModelPath);
+
+				var res = TemplateTreeBuilder.BuildTrees(
+					_currentTemplateDir,
+					Path.GetFileNameWithoutExtension(_currentModelPath),
+					faceGroups,
+					s => Log(s),
+					s => LogWarn(s)
+				);
+
+				LogOk($"Tree build OK: parts={res.CreatedParts.Count}, visuals={res.VisualXmls.Count}, surface={res.SurfaceXml ?? "null"}");
+
+				foreach (var p in res.CreatedParts)
+					LogOk($"- {p}");
 
 				LogOk($"Template prepared: {_currentTemplateDir}");
 
-				// Quick check: Template.Solid.xml exists
+				// Sanity check
 				var solidXml = Path.Combine(_currentTemplateDir, "Template.Solid.xml");
 				if (File.Exists(solidXml))
 					LogOk("Template.Solid.xml OK");
 				else
-					LogWarn("Template.Solid.xml missing in template folder!");
+					LogWarn("Template.Solid.xml missing!");
 
-				// Log what got copied into template (xml)
 				var copied = DirectoryUtil.SafeListFiles(_currentTemplateDir, "*.xml");
 				LogOk($"Template XML now: {copied.Count} file(s)");
+
 				foreach (var f in copied.OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
 					LogOk($"- {Path.GetFileName(f)}");
 
-				Status($"XML OK + Template ready: {_currentTemplateDir}");
+				Status($"XML OK + Template ready");
 			}
 			catch (Exception ex)
 			{
-				LogWarn("Template prep/inject failed (you can still compile manually): " + ex.Message);
-				Status("XML OK, but template prep failed (see logs).");
+				LogWarn("Template prep failed: " + ex.Message);
+				Status("XML OK, template failed (see logs).");
+			}
+		}
+
+
+
+		private void LogErrDedup(string line)
+		{
+			if (line == _lastErrLine)
+			{
+				_lastErrCount++;
+				return;
 			}
 
+			// flush précédent
+			if (_lastErrLine != null && _lastErrCount > 1)
+				Log(Colors.Orange, $"(previous line repeated {_lastErrCount} times)");
+
+			_lastErrLine = line;
+			_lastErrCount = 1;
+			Log("ERR: " + line);
 		}
 
 		private async void CompileGbx_Click(object sender, RoutedEventArgs e)
@@ -451,7 +576,7 @@ namespace GbxSolidTool
 					_paths.PythonExe,
 					args,
 					s => Dispatcher.Invoke(() => Log(s)),
-					s => Dispatcher.Invoke(() => Log("ERR: " + s)),
+					s => Dispatcher.Invoke(() => LogErrDedup(s)),
 					workingDirectory: templateDir
 				);
 
@@ -488,7 +613,6 @@ namespace GbxSolidTool
 		}
 
 		// ---------------- Model loading ----------------
-
 		private void LoadModel(string path)
 		{
 			try
@@ -503,10 +627,11 @@ namespace GbxSolidTool
 				ClearLogs();
 				Log($"Load: {path}");
 
-				// Parse 3DS
-				var declaredMaterials = ThreeDsParser.ExtractMaterialNamesA000(path);
-				var faceGroups = ThreeDsParser.ExtractFaceMaterialGroups4130(path);
+				// ---- Parse 3DS materials ----
+				var declaredMaterials = ThreeDsParser.ExtractMaterialNamesA000(path);          // 0xA000 (declared)
+				var faceGroups = ThreeDsParser.ExtractFaceMaterialGroups4130(path);           // 0x4130 (used per faces)
 
+				// Keep your existing nice summary
 				MaterialLogging.LogDetectedMaterialsWithFaces(
 					s => Log(s),
 					(c, s) => Log(c, s),
@@ -514,7 +639,75 @@ namespace GbxSolidTool
 					faceGroups
 				);
 
-				// Import Helix
+				// ---- NEW: casing warnings at LOAD time (no more TitleCase heuristic) ----
+				// 1) Warn if same material appears with multiple casings in 0x4130 (true casing issue)
+				{
+					var byIgnoreCase = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+
+					foreach (var g in faceGroups)
+					{
+						var name = g.MaterialName?.Trim();
+						if (string.IsNullOrWhiteSpace(name))
+							continue;
+
+						if (!byIgnoreCase.TryGetValue(name, out var set))
+						{
+							set = new HashSet<string>(StringComparer.Ordinal);
+							byIgnoreCase[name] = set;
+						}
+						set.Add(name);
+					}
+
+					foreach (var kv in byIgnoreCase)
+					{
+						if (kv.Value.Count > 1)
+						{
+							LogWarn(
+								$"Material casing mismatch in 3DS: {string.Join(", ", kv.Value.Select(v => $"'{v}'"))}. " +
+								"3ds2gbxml is case-sensitive — use ONE exact spelling everywhere."
+							);
+						}
+					}
+				}
+
+				// 2) If 0xA000 exists, warn when a used name matches a declared one only by case
+				if (declaredMaterials != null && declaredMaterials.Count > 0)
+				{
+					var declaredExact = new HashSet<string>(declaredMaterials, StringComparer.Ordinal);
+					var declaredIgnore = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+					foreach (var d in declaredMaterials)
+					{
+						var dn = d?.Trim();
+						if (string.IsNullOrWhiteSpace(dn))
+							continue;
+
+						// Keep first encountered as "canonical"
+						if (!declaredIgnore.ContainsKey(dn))
+							declaredIgnore[dn] = dn;
+					}
+
+					var warned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+					foreach (var g in faceGroups)
+					{
+						var used = g.MaterialName?.Trim();
+						if (string.IsNullOrWhiteSpace(used))
+							continue;
+
+						if (declaredIgnore.TryGetValue(used, out var canonicalDeclared) &&
+							!declaredExact.Contains(used) && // differs by case
+							warned.Add(used))
+						{
+							LogWarn(
+								$"Material casing mismatch vs A000: used '{used}' but declared '{canonicalDeclared}'. " +
+								"3ds2gbxml is case-sensitive — rename in your 3D editor."
+							);
+						}
+					}
+				}
+
+				// ---- Import Helix ----
 				var model = _importer.Load(path);
 				_currentModelPath = path;
 
@@ -538,5 +731,7 @@ namespace GbxSolidTool
 				MessageBox.Show(ex.ToString(), "Load failed", MessageBoxButton.OK, MessageBoxImage.Error);
 			}
 		}
+
+
 	}
 }
