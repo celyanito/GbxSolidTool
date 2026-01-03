@@ -613,6 +613,7 @@ namespace GbxSolidTool
 		}
 
 		// ---------------- Model loading ----------------
+		// ---------------- Model loading ----------------
 		private void LoadModel(string path)
 		{
 			try
@@ -628,10 +629,10 @@ namespace GbxSolidTool
 				Log($"Load: {path}");
 
 				// ---- Parse 3DS materials ----
-				var declaredMaterials = ThreeDsParser.ExtractMaterialNamesA000(path);          // 0xA000 (declared)
-				var faceGroups = ThreeDsParser.ExtractFaceMaterialGroups4130(path);           // 0x4130 (used per faces)
+				var declaredMaterials = ThreeDsParser.ExtractMaterialNamesA000(path);    // 0xA000 (declared)
+				var faceGroups = ThreeDsParser.ExtractFaceMaterialGroups4130(path);     // 0x4130 (used per faces)
 
-				// Keep your existing nice summary
+				// Existing summary (keep)
 				MaterialLogging.LogDetectedMaterialsWithFaces(
 					s => Log(s),
 					(c, s) => Log(c, s),
@@ -639,69 +640,40 @@ namespace GbxSolidTool
 					faceGroups
 				);
 
-				// ---- NEW: casing warnings at LOAD time (no more TitleCase heuristic) ----
-				// 1) Warn if same material appears with multiple casings in 0x4130 (true casing issue)
+				// ---- NEW: warn about material name casing vs canonical TM surface names (at LOAD time) ----
+				// This is what catches: "freewheeling" -> expected "FreeWheeling"
 				{
-					var byIgnoreCase = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
-
-					foreach (var g in faceGroups)
-					{
-						var name = g.MaterialName?.Trim();
-						if (string.IsNullOrWhiteSpace(name))
-							continue;
-
-						if (!byIgnoreCase.TryGetValue(name, out var set))
-						{
-							set = new HashSet<string>(StringComparer.Ordinal);
-							byIgnoreCase[name] = set;
-						}
-						set.Add(name);
-					}
-
-					foreach (var kv in byIgnoreCase)
-					{
-						if (kv.Value.Count > 1)
-						{
-							LogWarn(
-								$"Material casing mismatch in 3DS: {string.Join(", ", kv.Value.Select(v => $"'{v}'"))}. " +
-								"3ds2gbxml is case-sensitive — use ONE exact spelling everywhere."
-							);
-						}
-					}
-				}
-
-				// 2) If 0xA000 exists, warn when a used name matches a declared one only by case
-				if (declaredMaterials != null && declaredMaterials.Count > 0)
-				{
-					var declaredExact = new HashSet<string>(declaredMaterials, StringComparer.Ordinal);
-					var declaredIgnore = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
-					foreach (var d in declaredMaterials)
-					{
-						var dn = d?.Trim();
-						if (string.IsNullOrWhiteSpace(dn))
-							continue;
-
-						// Keep first encountered as "canonical"
-						if (!declaredIgnore.ContainsKey(dn))
-							declaredIgnore[dn] = dn;
-					}
-
 					var warned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-					foreach (var g in faceGroups)
+					var uniqueUsed = faceGroups
+						.Select(g => g.MaterialName)
+						.Where(n => !string.IsNullOrWhiteSpace(n))
+						.Select(n => n!.Trim())
+						.Distinct(StringComparer.OrdinalIgnoreCase)
+						.ToList();
+
+					foreach (var used in uniqueUsed)
 					{
-						var used = g.MaterialName?.Trim();
-						if (string.IsNullOrWhiteSpace(used))
+						if (!warned.Add(used))
 							continue;
 
-						if (declaredIgnore.TryGetValue(used, out var canonicalDeclared) &&
-							!declaredExact.Contains(used) && // differs by case
-							warned.Add(used))
+						var canonical = FindCanonicalMaterial(used); // uses your CanonicalMaterials list
+
+						// Known material but wrong case
+						if (canonical != null && !used.Equals(canonical, StringComparison.Ordinal))
 						{
 							LogWarn(
-								$"Material casing mismatch vs A000: used '{used}' but declared '{canonicalDeclared}'. " +
-								"3ds2gbxml is case-sensitive — rename in your 3D editor."
+								$"Material casing mismatch detected: '{used}' → expected '{canonical}'. " +
+								"3ds2gbxml is case-sensitive; rename the material in your 3D editor."
+							);
+						}
+						// Unknown material name (not in canonical list) -> useful warning, but no spam
+						else if (canonical == null)
+						{
+							LogWarn(
+								$"Unknown material name: '{used}'. " +
+								"3ds2gbxml may not recognize it and can fallback to a default (often Concrete). " +
+								"Consider renaming it to a known surface name (e.g. Concrete, Dirt, Sand, FreeWheeling...)."
 							);
 						}
 					}
@@ -731,7 +703,6 @@ namespace GbxSolidTool
 				MessageBox.Show(ex.ToString(), "Load failed", MessageBoxButton.OK, MessageBoxImage.Error);
 			}
 		}
-
 
 	}
 }
