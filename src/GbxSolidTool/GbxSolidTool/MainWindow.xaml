@@ -75,16 +75,27 @@
 
                     <!-- Wireframe checkbox (top-left inside viewport) -->
                     <Border HorizontalAlignment="Left"
-                        VerticalAlignment="Top"
-                        Margin="10"
-                        Padding="6,4"
-                        CornerRadius="6"
-                        Background="#AA000000">
-                                        <CheckBox Content="Wireframe"
-                              Foreground="White"
-                              Checked="Wireframe_Checked"
-                              Unchecked="Wireframe_Unchecked"/>
+                            VerticalAlignment="Top"
+                            Margin="10"
+                            Padding="6,4"
+                            CornerRadius="6"
+                            Background="#AA000000">
+                        <StackPanel>
+                            <CheckBox Content="Wireframe"
+                                Foreground="White"
+                                Checked="Wireframe_Checked"
+                                Unchecked="Wireframe_Unchecked"/>
+
+                            <CheckBox x:Name="FaceOrientationCheckBox"
+                                  Content="Face Orientation"
+                                  Foreground="White"
+                                  Margin="0,6,0,0"
+                                  Checked="NormalsCheckBox_Checked"
+                                  Unchecked="NormalsCheckBox_Unchecked"/>
+
+                        </StackPanel>
                     </Border>
+
 
 
                     <!-- Overlay message when no model -->

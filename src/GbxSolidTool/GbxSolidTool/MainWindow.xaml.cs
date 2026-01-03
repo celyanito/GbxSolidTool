@@ -39,6 +39,14 @@ namespace GbxSolidTool
 		private readonly TemplateService _template;
 		
 		private int _lastErrCount;
+		private bool _normalsEnabled;
+		private LinesVisual3D? _normalsBlue;
+		private LinesVisual3D? _normalsRed;
+		private Model3D? _currentModel;
+		private bool _faceOrientationEnabled;
+
+		// backup des matériaux pour pouvoir restaurer quand on décoche
+		private readonly Dictionary<GeometryModel3D, (Material? Front, Material? Back)> _savedFaceMats = new();
 
 		public MainWindow()
 		{
@@ -53,9 +61,184 @@ namespace GbxSolidTool
 			Log("Ready.");
 			UpdateOverlay();
 		}
-		
+		private void ApplyFaceOrientationMode()
+		{
+			if (_currentModel == null) return;
+
+			var geoms = new List<GeometryModel3D>();
+			ViewportService.CollectGeometryModels(_currentModel, geoms);
+
+			// matériaux “Blender-like”
+			var frontMat = new DiffuseMaterial(new SolidColorBrush(Color.FromArgb(190, 80, 140, 255))); // bleu
+			var backMat = new DiffuseMaterial(new SolidColorBrush(Color.FromArgb(190, 255, 80, 80)));  // rouge
+
+			foreach (var g in geoms)
+			{
+				// sauvegarde une seule fois
+				if (!_savedFaceMats.ContainsKey(g))
+					_savedFaceMats[g] = (g.Material, g.BackMaterial);
+
+				g.Material = frontMat;
+				g.BackMaterial = backMat;
+			}
+
+			Log("Face Orientation: ON (blue front / red back)");
+		}
+
+		private void RestoreFaceOrientationMode()
+		{
+			foreach (var kv in _savedFaceMats)
+			{
+				kv.Key.Material = kv.Value.Front;
+				kv.Key.BackMaterial = kv.Value.Back;
+			}
+
+			Log("Face Orientation: OFF (restored materials)");
+		}
+
 
 		// ---------------- UI helpers ----------------
+		private void NormalsCheckBox_Checked(object sender, RoutedEventArgs e)
+		{
+			_faceOrientationEnabled = true;
+			ApplyFaceOrientationMode();
+		}
+
+		private void NormalsCheckBox_Unchecked(object sender, RoutedEventArgs e)
+		{
+			_faceOrientationEnabled = false;
+			RestoreFaceOrientationMode();
+		}
+
+		private void ClearNormalsOverlay()
+		{
+			if (View3D == null) return;
+
+			if (_normalsBlue != null) View3D.Children.Remove(_normalsBlue);
+			if (_normalsRed != null) View3D.Children.Remove(_normalsRed);
+
+			_normalsBlue = null;
+			_normalsRed = null;
+		}
+
+		private void UpdateNormalsOverlay()
+		{
+			if (View3D == null) return;
+
+			// Si désactivé ou pas de modèle -> on nettoie
+			// Si désactivé ou pas de modèle -> on nettoie
+			if (!_normalsEnabled || _currentModel == null)
+			{
+				ClearNormalsOverlay();
+				return;
+			}
+
+
+			// Rebuild à chaque fois (simple + fiable)
+			ClearNormalsOverlay();
+
+			var bluePts = new Point3DCollection();
+			var redPts = new Point3DCollection();
+
+			// Récupère toutes les meshes du modèle chargé
+			var meshes = new List<MeshGeometry3D>();
+			CollectMeshes(_currentModel, meshes);
+
+			if (meshes.Count == 0)
+				return;
+
+			int blueSegs = 0, redSegs = 0;
+
+			foreach (var mesh in meshes)
+			{
+				if (mesh.Positions == null || mesh.Positions.Count == 0)
+					continue;
+
+				if (mesh.TriangleIndices == null || mesh.TriangleIndices.Count < 3)
+					continue;
+
+				var bounds = mesh.Bounds;
+				var center = new Point3D(
+					bounds.X + bounds.SizeX * 0.5,
+					bounds.Y + bounds.SizeY * 0.5,
+					bounds.Z + bounds.SizeZ * 0.5
+				);
+
+				double size = Math.Max(bounds.SizeX, Math.Max(bounds.SizeY, bounds.SizeZ));
+				double len = Math.Max(0.001, size * 0.06); // un peu plus grand pour bien voir
+
+				// échantillonnage si énorme
+				int triCount = mesh.TriangleIndices.Count / 3;
+				int stepTri = triCount > 50000 ? 10 : 1;
+
+				for (int t = 0; t < triCount; t += stepTri)
+				{
+					int i0 = mesh.TriangleIndices[t * 3 + 0];
+					int i1 = mesh.TriangleIndices[t * 3 + 1];
+					int i2 = mesh.TriangleIndices[t * 3 + 2];
+
+					if (i0 < 0 || i1 < 0 || i2 < 0 ||
+						i0 >= mesh.Positions.Count || i1 >= mesh.Positions.Count || i2 >= mesh.Positions.Count)
+						continue;
+
+					var p0 = mesh.Positions[i0];
+					var p1 = mesh.Positions[i1];
+					var p2 = mesh.Positions[i2];
+
+					// centre de face
+					var pc = new Point3D(
+						(p0.X + p1.X + p2.X) / 3.0,
+						(p0.Y + p1.Y + p2.Y) / 3.0,
+						(p0.Z + p1.Z + p2.Z) / 3.0
+					);
+
+					// normale de face via cross
+					var v1 = p1 - p0;
+					var v2 = p2 - p0;
+					var n = Vector3D.CrossProduct(v1, v2);
+
+					if (n.LengthSquared < 1e-12)
+						continue;
+
+					n.Normalize();
+
+					var end = new Point3D(pc.X + n.X * len, pc.Y + n.Y * len, pc.Z + n.Z * len);
+
+					var vc = pc - center;
+					double d = (n.X * vc.X) + (n.Y * vc.Y) + (n.Z * vc.Z);
+
+					if (d >= 0)
+					{
+						bluePts.Add(pc);
+						bluePts.Add(end);
+						blueSegs++;
+					}
+					else
+					{
+						redPts.Add(pc);
+						redPts.Add(end);
+						redSegs++;
+					}
+				}
+			}
+
+			// petit log utile
+			Log($"Normals overlay: blue={blueSegs}, red={redSegs}");
+
+		}
+		private static void CollectMeshes(Model3D model, List<MeshGeometry3D> outMeshes)
+		{
+			if (model is Model3DGroup group)
+			{
+				foreach (var child in group.Children)
+					CollectMeshes(child, outMeshes);
+			}
+			else if (model is GeometryModel3D geomModel)
+			{
+				if (geomModel.Geometry is MeshGeometry3D mesh)
+					outMeshes.Add(mesh);
+			}
+		}
 
 		private void Status(string text) => StatusText.Text = text;
 
@@ -199,6 +382,8 @@ namespace GbxSolidTool
 			_viewport.Clear();
 			UpdateOverlay();
 			Status("Cleared.");
+			_currentModel = null;
+			ClearNormalsOverlay();
 		}
 
 		private void ToggleLogs_Click(object sender, RoutedEventArgs e)
@@ -682,6 +867,7 @@ namespace GbxSolidTool
 				// ---- Import Helix ----
 				var model = _importer.Load(path);
 				_currentModelPath = path;
+				_currentModel = model;
 
 				// Apply materials by 0x4130 mapping
 				var geoms = new List<GeometryModel3D>();
@@ -693,7 +879,10 @@ namespace GbxSolidTool
 				UpdateOverlay();
 
 				_viewport.UpdateWireframe(_wireframeEnabled);
+				if (_faceOrientationEnabled)
+					ApplyFaceOrientationMode();
 
+				UpdateNormalsOverlay();
 				Status($"Loaded: {Path.GetFileName(path)} ({path})");
 			}
 			catch (Exception ex)
@@ -702,6 +891,8 @@ namespace GbxSolidTool
 				Log("ERROR: " + ex);
 				MessageBox.Show(ex.ToString(), "Load failed", MessageBoxButton.OK, MessageBoxImage.Error);
 			}
+			
+
 		}
 
 	}
